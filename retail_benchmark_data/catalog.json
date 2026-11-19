@@ -1,0 +1,37 @@
+{
+  "tables": {
+    "Products": {
+      "fields": [
+        "product_id",
+        "name",
+        "category",
+        "price",
+        "stock"
+      ],
+      "layout": "row",
+      "backend_kind": "page"
+    },
+    "Customers": {
+      "fields": [
+        "customer_id",
+        "name",
+        "email",
+        "region"
+      ],
+      "layout": "row",
+      "backend_kind": "page"
+    },
+    "Orders": {
+      "fields": [
+        "order_id",
+        "customer_id",
+        "product_id",
+        "quantity",
+        "order_date",
+        "total_amount"
+      ],
+      "layout": "row",
+      "backend_kind": "page"
+    }
+  }
+}

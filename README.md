@@ -64,11 +64,12 @@ The backend is a local adapter to demonstrate the object-storage abstraction; it
 python .\workloads\generate_retail_data.py --db .\retail_data --products 10000 --customers 1000 --orders 5000 --seed 42
 ```
 
-To use object-backed pages, add `--backend objects`. The data is synthetic and generated with a fixed seed. Adjust sizes to your computer. The generator is intended for a first benchmark/demo, not a replacement for the TPC-H subset required in M3.
+To use object-backed pages, add `--backend objects`. The data is synthetic and generated with a fixed seed. The generator appends to existing tables when their schemas match; it does not delete existing database contents. Use a separate `--db` directory for a fresh dataset. Adjust sizes to your computer. The generator is intended for a first benchmark/demo, not a replacement for the TPC-H subset required in M3.
 
 ## Benchmarks
 
 Run each benchmark multiple times and report the median; a single run is not sufficient for a final report.
+The index benchmark runs three repetitions by default, checks lookup correctness, and writes per-run and median write/point-lookup results. Override the count with `--repeats`.
 
 ```powershell
 python .\benchmarks\benchmark_storage.py --pages 128 --accesses 10000 --capacity 16 --seed 42
