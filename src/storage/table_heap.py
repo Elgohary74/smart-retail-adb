@@ -42,6 +42,7 @@ from src.common.exceptions import KeyNotFoundError, RecordTooLargeError, Storage
 from src.common.types import RID, ColumnDef, DataType, LayoutType, Schema
 from src.storage.buffer_pool import BufferPoolManager
 from src.storage.column_page import ColumnPage
+from src.storage.page_header import PageHeader
 from src.storage.slotted_page import SlottedPage
 
 _MAX_SLOTTED_PAYLOAD: int = PAGE_SIZE - HEADER_SIZE - MVCC_HEADER_SIZE - SLOT_ENTRY_SIZE
@@ -334,13 +335,21 @@ class RowTableHeap:
             # BufferPoolFullError during allocation never drops the existing row.
             assert overflowed
             new_rid = self._insert_payload(payload)
-            old_buf = self._bpm.fetch_page(rid.page_id)
-            old_dirty = False
             try:
-                old_sp = SlottedPage(old_buf)
-                old_dirty = old_sp.delete_tuple(rid.slot_id)
-            finally:
-                self._bpm.unpin_page(rid.page_id, is_dirty=old_dirty)
+                old_buf = self._bpm.fetch_page(rid.page_id)
+                old_dirty = False
+                try:
+                    old_sp = SlottedPage(old_buf)
+                    old_dirty = old_sp.delete_tuple(rid.slot_id)
+                finally:
+                    self._bpm.unpin_page(rid.page_id, is_dirty=old_dirty)
+            except Exception:
+                # Compensating cleanup avoids leaving duplicate live rows if tombstoning fails.
+                try:
+                    self.delete(new_rid)
+                except Exception:
+                    pass
+                raise
             return new_rid
 
     def delete(self, rid: RID) -> bool:
@@ -656,11 +665,51 @@ class ColumnTableHeap:
 
         return True, slot_count
 
+    def _delete_page_all_columns(self, page_id: int) -> None:
+        """Best-effort unpin and FSM deletion of ``page_id`` across every column."""
+        for col in self.schema.columns:
+            bpm = self._column_bpms[col.name]
+            try:
+                bpm.unpin_page(page_id, is_dirty=False)
+            except Exception:
+                pass
+            try:
+                bpm.delete_page(page_id)
+            except Exception:
+                pass
+
+    def _rollback_page_writes(
+        self,
+        page_id: int,
+        was_new_page: bool,
+        mutated_cols: list[tuple[BufferPoolManager, int, int]],
+    ) -> None:
+        """Restore column pages after a partial multi-column write failure."""
+        if was_new_page:
+            self._delete_page_all_columns(page_id)
+            return
+
+        for bpm, old_slots, old_free in mutated_cols:
+            try:
+                buf = bpm.fetch_page(page_id)
+                restored = False
+                try:
+                    header = PageHeader.unpack(buf, 0)
+                    header.slot_count = old_slots
+                    header.free_space_ptr = old_free
+                    header.pack_into(buf, 0)
+                    restored = True
+                finally:
+                    bpm.unpin_page(page_id, is_dirty=restored)
+            except Exception:
+                pass
+
     def _allocate_aligned_page(self) -> int:
         """Allocate and initialize an empty aligned ``ColumnPage`` across all columns.
 
-        Rolls back any previously allocated column pages if a later column fails
-        (e.g., ``BufferPoolFullError``) so column files never diverge.
+        Rolls back any previously allocated column pages if any column fails
+        (e.g., ``BufferPoolFullError``, page ID mismatch, or init error) so
+        column files never diverge or leak FSM pages.
         """
         created: list[tuple[BufferPoolManager, int]] = []
         target_pid: int | None = None
@@ -668,6 +717,7 @@ class ColumnTableHeap:
             for col in self.schema.columns:
                 bpm = self._column_bpms[col.name]
                 pid, buf = bpm.new_page()
+                created.append((bpm, pid))
                 try:
                     if target_pid is None:
                         target_pid = pid
@@ -681,10 +731,16 @@ class ColumnTableHeap:
                     )
                 finally:
                     bpm.unpin_page(pid, is_dirty=True)
-                created.append((bpm, pid))
         except Exception:
-            for bpm, pid in created:
-                bpm.delete_page(pid)
+            for col_bpm, col_pid in created:
+                try:
+                    col_bpm.unpin_page(col_pid, is_dirty=False)
+                except Exception:
+                    pass
+                try:
+                    col_bpm.delete_page(col_pid)
+                except Exception:
+                    pass
             raise
 
         assert target_pid is not None
@@ -776,7 +832,9 @@ class ColumnTableHeap:
         values, byte_lens = self._extract_row_values(row)
         with self._lock:
             self._ensure_open()
+            prev_last_page_id = self._last_page_id
             target_pid: int | None = None
+            was_new_page = False
             if self._last_page_id is not None:
                 fits, _ = self._page_available_rows_single(self._last_page_id, byte_lens)
                 if fits:
@@ -784,28 +842,40 @@ class ColumnTableHeap:
 
             if target_pid is None:
                 target_pid = self._allocate_aligned_page()
+                was_new_page = True
                 self._last_page_id = target_pid
 
+            mutated_cols: list[tuple[BufferPoolManager, int, int]] = []
             assigned_slot: int | None = None
-            for idx, col in enumerate(self.schema.columns):
-                bpm = self._column_bpms[col.name]
-                buf = bpm.fetch_page(target_pid)
-                try:
-                    cp = ColumnPage(buf, col.dtype, max_rows=self._chunk_rows)
-                    slot_id = cp.append_value(values[idx])
-                    if slot_id is None:
-                        raise StorageError(
-                            f"Column {col.name!r} overflowed unexpectedly on page {target_pid}"
-                        )
-                    if assigned_slot is None:
-                        assigned_slot = slot_id
-                    elif slot_id != assigned_slot:
-                        raise StorageError(
-                            f"Slot alignment mismatch on page {target_pid} for column "
-                            f"{col.name!r}: expected {assigned_slot}, got {slot_id}"
-                        )
-                finally:
-                    bpm.unpin_page(target_pid, is_dirty=True)
+            try:
+                for idx, col in enumerate(self.schema.columns):
+                    bpm = self._column_bpms[col.name]
+                    buf = bpm.fetch_page(target_pid)
+                    mutated = False
+                    try:
+                        cp = ColumnPage(buf, col.dtype, max_rows=self._chunk_rows)
+                        old_slots = cp.slot_count
+                        old_free = cp.free_space_ptr
+                        slot_id = cp.append_value(values[idx])
+                        if slot_id is None:
+                            raise StorageError(
+                                f"Column {col.name!r} overflowed unexpectedly on page {target_pid}"
+                            )
+                        mutated = True
+                        mutated_cols.append((bpm, old_slots, old_free))
+                        if assigned_slot is None:
+                            assigned_slot = slot_id
+                        elif slot_id != assigned_slot:
+                            raise StorageError(
+                                f"Slot alignment mismatch on page {target_pid} for column "
+                                f"{col.name!r}: expected {assigned_slot}, got {slot_id}"
+                            )
+                    finally:
+                        bpm.unpin_page(target_pid, is_dirty=mutated)
+            except Exception:
+                self._rollback_page_writes(target_pid, was_new_page, mutated_cols)
+                self._last_page_id = prev_last_page_id
+                raise
 
             assert assigned_slot is not None
             return RID(page_id=target_pid, slot_id=assigned_slot)
@@ -866,49 +936,82 @@ class ColumnTableHeap:
 
         with self._lock:
             self._ensure_open()
+            initial_last_page_id = self._last_page_id
+            undo_log: list[
+                tuple[int, bool, list[tuple[BufferPoolManager, int, int]]]
+            ] = []
             rids: list[RID] = []
             offset = 0
-            while offset < total:
-                if self._last_page_id is None:
-                    self._last_page_id = self._allocate_aligned_page()
+            try:
+                while offset < total:
+                    was_new_page = False
+                    if self._last_page_id is None:
+                        target_pid = self._allocate_aligned_page()
+                        was_new_page = True
+                        self._last_page_id = target_pid
+                        undo_log.append((target_pid, True, []))
+                    else:
+                        target_pid = self._last_page_id
 
-                target_pid = self._last_page_id
-                start_slot, take = self._compute_batch_fit(
-                    target_pid, col_values, varchar_lens, offset, total
-                )
-                if take == 0:
-                    target_pid = self._allocate_aligned_page()
-                    self._last_page_id = target_pid
                     start_slot, take = self._compute_batch_fit(
                         target_pid, col_values, varchar_lens, offset, total
                     )
                     if take == 0:
-                        raise RecordTooLargeError(
-                            f"Row at batch index {offset} cannot fit in an empty ColumnPage"
-                        )
-
-                end = offset + take
-                for idx, col in enumerate(self.schema.columns):
-                    bpm = self._column_bpms[col.name]
-                    buf = bpm.fetch_page(target_pid)
-                    try:
-                        cp = ColumnPage(buf, col.dtype, max_rows=self._chunk_rows)
-                        written = cp.append_batch(col_values[idx][offset:end])
-                        if written != take:
-                            raise StorageError(
-                                f"Column {col.name!r} wrote {written} rows instead of "
-                                f"{take} on page {target_pid}"
+                        if was_new_page:
+                            raise RecordTooLargeError(
+                                f"Row at batch index {offset} cannot fit in an empty ColumnPage"
                             )
-                    finally:
-                        bpm.unpin_page(target_pid, is_dirty=True)
+                        target_pid = self._allocate_aligned_page()
+                        was_new_page = True
+                        self._last_page_id = target_pid
+                        undo_log.append((target_pid, True, []))
+                        start_slot, take = self._compute_batch_fit(
+                            target_pid, col_values, varchar_lens, offset, total
+                        )
+                        if take == 0:
+                            raise RecordTooLargeError(
+                                f"Row at batch index {offset} cannot fit in an empty ColumnPage"
+                            )
 
-                rids.extend(
-                    RID(page_id=target_pid, slot_id=slot)
-                    for slot in range(start_slot, start_slot + take)
-                )
-                offset = end
+                    mutated_cols: list[tuple[BufferPoolManager, int, int]] = []
+                    if not was_new_page:
+                        undo_log.append((target_pid, False, mutated_cols))
 
-            return rids
+                    end = offset + take
+                    for idx, col in enumerate(self.schema.columns):
+                        bpm = self._column_bpms[col.name]
+                        buf = bpm.fetch_page(target_pid)
+                        mutated = False
+                        try:
+                            cp = ColumnPage(buf, col.dtype, max_rows=self._chunk_rows)
+                            old_slots = cp.slot_count
+                            old_free = cp.free_space_ptr
+                            mutated = True
+                            mutated_cols.append((bpm, old_slots, old_free))
+                            written = cp.append_batch(col_values[idx][offset:end])
+                            if written == 0:
+                                mutated = False
+                                mutated_cols.pop()
+                            if written != take:
+                                raise StorageError(
+                                    f"Column {col.name!r} wrote {written} rows instead of "
+                                    f"{take} on page {target_pid}"
+                                )
+                        finally:
+                            bpm.unpin_page(target_pid, is_dirty=mutated)
+
+                    rids.extend(
+                        RID(page_id=target_pid, slot_id=slot)
+                        for slot in range(start_slot, start_slot + take)
+                    )
+                    offset = end
+
+                return rids
+            except Exception:
+                for page_id, was_new, mutated_cols in reversed(undo_log):
+                    self._rollback_page_writes(page_id, was_new, mutated_cols)
+                self._last_page_id = initial_last_page_id
+                raise
 
     def get(self, rid: RID) -> dict[str, Any] | None:
         """Reconstruct a single row across all column files at ``rid``.

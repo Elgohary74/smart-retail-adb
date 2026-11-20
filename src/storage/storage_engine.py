@@ -43,10 +43,26 @@ from src.storage.table_heap import ColumnTableHeap, RowTableHeap
 TableHeap = RowTableHeap | ColumnTableHeap
 
 
-def _validate_table_name(name: str) -> None:
-    """Reject empty or path-traversing table names before mapping to filenames."""
-    if not name or "/" in name or "\\" in name or "\x00" in name or name in {".", ".."}:
-        raise ValueError(f"Invalid table name {name!r}")
+def _validate_identifier(name: str, kind: str) -> None:
+    """Reject empty, dotted, or path-traversing table/column names before file mapping."""
+    if (
+        not isinstance(name, str)
+        or not name
+        or name.strip() != name
+        or "/" in name
+        or "\\" in name
+        or "\x00" in name
+        or "." in name
+        or Path(name).name != name
+    ):
+        raise ValueError(f"Invalid {kind} name {name!r}")
+
+
+def _validate_schema_identifiers(schema: Schema) -> None:
+    """Validate that a schema's table and column names are safe filename components."""
+    _validate_identifier(schema.table_name, "table")
+    for col in schema.columns:
+        _validate_identifier(col.name, "column")
 
 
 class StorageEngine:
@@ -141,9 +157,12 @@ class StorageEngine:
         chunk_rows: int = CHUNK_ROWS,
     ) -> TableHeap:
         """Open or create the underlying ``DiskManager``/``BufferPoolManager``/heap."""
-        _validate_table_name(schema.table_name)
+        _validate_schema_identifiers(schema)
+        tables_root = self.tables_dir.resolve()
         if layout == LayoutType.ROW:
             db_path = self.tables_dir / f"{schema.table_name}.db"
+            if db_path.resolve().parent != tables_root:
+                raise ValueError(f"Invalid table path for {schema.table_name!r}")
             dm = DiskManager(db_path)
             try:
                 bpm = BufferPoolManager(
@@ -162,6 +181,8 @@ class StorageEngine:
             try:
                 for col in schema.columns:
                     col_path = self.tables_dir / f"{schema.table_name}.{col.name}.col"
+                    if col_path.resolve().parent != tables_root:
+                        raise ValueError(f"Invalid column path for {col.name!r}")
                     dm = DiskManager(col_path)
                     dms.append(dm)
                     col_bpms[col.name] = BufferPoolManager(
@@ -261,9 +282,24 @@ class StorageEngine:
 
                     for table_name, meta in raw_meta["tables"].items():
                         try:
+                            if not isinstance(meta, dict):
+                                raise TypeError("table metadata entry must be a JSON object")
                             layout = LayoutType(meta["layout"])
                             schema = Schema.from_dict(meta["schema"])
-                            chunk_rows = int(meta.get("chunk_rows", CHUNK_ROWS))
+                            if schema.table_name != table_name:
+                                raise ValueError(
+                                    f"Mismatched table key {table_name!r} vs schema "
+                                    f"{schema.table_name!r}"
+                                )
+                            _validate_schema_identifiers(schema)
+                            raw_chunk = meta.get("chunk_rows", CHUNK_ROWS)
+                            if (
+                                isinstance(raw_chunk, bool)
+                                or not isinstance(raw_chunk, int)
+                                or raw_chunk <= 0
+                            ):
+                                raise ValueError(f"Invalid chunk_rows {raw_chunk!r}")
+                            chunk_rows = raw_chunk
                         except (KeyError, TypeError, ValueError) as exc:
                             raise PageCorruptedError(
                                 f"Invalid table metadata for {table_name!r} in "
@@ -313,7 +349,7 @@ class StorageEngine:
         """
         if not isinstance(schema, Schema):
             raise TypeError(f"schema must be a Schema, got {type(schema).__name__}")
-        _validate_table_name(schema.table_name)
+        _validate_schema_identifiers(schema)
         resolved_layout = LayoutType(layout)
 
         with self._lock:
