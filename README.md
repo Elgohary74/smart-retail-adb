@@ -47,8 +47,8 @@ Quick dependency verification:
 | [`src/`](src/) | Core DBMS package (`common/`, `storage/`, `index/`, `query/`) |
 | [`tests/`](tests/) | Gate 1 ([`test_m1_storage.py`](tests/test_m1_storage.py)) and Gate 2 ([`test_m2_indexing.py`](tests/test_m2_indexing.py)) adversarial suites |
 | [`bench/`](bench/) | Deterministic Retail data loader (`retail_loader.py`) and benchmark suite (`run_m1_m2_benchmarks.py`) |
-| [`docs/`](docs/) | Architecture spec ([`architecture.md`](docs/architecture.md)), [`ai_specs/`](docs/ai_specs/), [`DEV_JOURNAL.md`](docs/DEV_JOURNAL.md), ADRs, and M3–M6 handoff docs |
-| `results/` | Generated Gate 3 CSV metrics, environment metadata, and 300-DPI PNG plots |
+| [`docs/`](docs/) | Architecture spec ([`architecture.md`](docs/architecture.md)), [`DEV_JOURNAL.md`](docs/DEV_JOURNAL.md), ADRs ([`ADR_M1_M2.md`](docs/decisions/ADR_M1_M2.md)), M1–M2 report ([`M1_M2_TECHNICAL_NARRATIVE.md`](docs/milestones/M1_M2_TECHNICAL_NARRATIVE.md)), and M3–M6 SDK ([`M3_M6_HANDOFF_CONTRACT.md`](docs/handoff/M3_M6_HANDOFF_CONTRACT.md)) |
+| [`results/m1_m2/`](results/m1_m2/) | Gate 3 CSV metrics ([`summary_metrics.csv`](results/m1_m2/summary_metrics.csv)), [`env_metadata.json`](results/m1_m2/env_metadata.json), and 300-DPI PNG [`plots/`](results/m1_m2/plots/) |
 | `data/` | Runtime database files (gitignored) |
 
 ---
@@ -108,7 +108,28 @@ finally:
 
 ---
 
-## 5. Rubric Traceability Summary (30 Marks)
+## 5. Gate 3 Benchmark Summary & Documentation
+
+Full methodology, environment metadata ([`env_metadata.json`](results/m1_m2/env_metadata.json)), complete tables ([`summary_metrics.csv`](results/m1_m2/summary_metrics.csv)), and analysis live in [`docs/milestones/M1_M2_TECHNICAL_NARRATIVE.md`](docs/milestones/M1_M2_TECHNICAL_NARRATIVE.md).
+
+| Experiment | Key Finding (`runs=5`, `seed=42`) | Plot |
+| :--- | :--- | :--- |
+| **1A** Buffer Pool (`LRU` vs. `FIFO`) | At 16 frames under Zipfian ($\theta=0.9$), `LRU` achieves **70.72%** hit ratio vs. **66.34%** `FIFO`; sequential scans thrash at **0.0%** ($\le 64$ frames) and jump to **98.7%** at `128` frames (`65`-page working set). | [`fig1_buffer_pool_hit_ratio.png`](results/m1_m2/plots/fig1_buffer_pool_hit_ratio.png) |
+| **1B** Row vs. Column (`200k` `order_items`) | `ColumnTableHeap` runs OLAP `SUM(qty * unit_price)` in **10.70 ms** vs. **1,525.42 ms** (`~142.6x` faster, `394` vs. `1,283` pages); `RowTableHeap` wins `5,000` OLTP point lookups (**127.31 ms** vs. **409.30 ms**, `~3.2x` faster). | [`fig2_row_vs_column_latency.png`](results/m1_m2/plots/fig2_row_vs_column_latency.png) |
+| **2A** Read-Heavy `90/10` (`50k` products) | `LSM_TREE` (**23,225 ops/s**, `0.059 ms` P95) and `BPLUS_TREE` (**19,453 ops/s**, `0.072 ms` P95) outperform `FULL_SCAN` (**4.17 ops/s**) by `~4,668x–5,574x`. | [`fig3_index_read_vs_write_throughput.png`](results/m1_m2/plots/fig3_index_read_vs_write_throughput.png) |
+| **2B** Write-Heavy `10/90` (`50k` inventory) | `LSM_TREE` achieves **13,108 ops/s** & **1.27 MB** vs. `BPLUS_TREE` **8,961 ops/s** & **2.30 MB** (`~3,332x` over `FULL_SCAN` at **3.93 ops/s**). | [`fig4_index_p95_latency_and_size.png`](results/m1_m2/plots/fig4_index_p95_latency_and_size.png) |
+| **2C** `WorkloadAdvisor` Trace (`4,150` ops) | Deterministic transitions: `FULL_SCAN` ($\alpha=0.5, \beta=0.0, N=150$) $\to$ `LSM_TREE` ($\alpha=0.903, \beta=0.0, N=1000$) $\to$ `BPLUS_TREE` ($\alpha=0.049, \beta=0.902, N=1000$). | — |
+| **2D** `ObjectStore` (`500` images, `34.01` MB) | `AES256GCMHook` sustains **1,008.1 MB/s** reads vs. **1,213.0 MB/s** `NoOpCipher` with **+0.107%** framing overhead (`34.04 MB` total). | [`fig5_encryption_throughput.png`](results/m1_m2/plots/fig5_encryption_throughput.png) |
+
+**Engineering & Handoff Docs:**
+* [`docs/decisions/ADR_M1_M2.md`](docs/decisions/ADR_M1_M2.md) — Architecture Decision Records (`ADR-001` through `ADR-007`)
+* [`docs/DEV_JOURNAL.md`](docs/DEV_JOURNAL.md) — Chronological debugging, bottlenecks, and failed-attempts log
+* [`docs/milestones/M1_M2_TECHNICAL_NARRATIVE.md`](docs/milestones/M1_M2_TECHNICAL_NARRATIVE.md) — Report-ready M1–M2 design, experimental setup, and analysis
+* [`docs/handoff/M3_M6_HANDOFF_CONTRACT.md`](docs/handoff/M3_M6_HANDOFF_CONTRACT.md) — Verified Python API signatures, M3–M5 recipes, and invariant checklist
+
+---
+
+## 6. Rubric Traceability Summary (30 Marks)
 
 | Milestone | Rubric Criterion | Marks | Target Modules | Gate Verification |
 | :--- | :--- | :---: | :--- | :--- |
