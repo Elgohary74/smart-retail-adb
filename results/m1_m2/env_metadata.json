@@ -1,0 +1,76 @@
+{
+  "platform": "Linux-7.2.15-1-omarchy-x86_64-with-glibc2.44",
+  "machine": "x86_64",
+  "cpu_count": 16,
+  "python_version": "3.14.8",
+  "numpy_version": "2.5.5",
+  "matplotlib_version": "3.11.2",
+  "PAGE_SIZE": 8192,
+  "DEFAULT_BUFFER_POOL_SIZE": 64,
+  "DEFAULT_MEMTABLE_BYTES": 1048576,
+  "random_seed": 42,
+  "runs": 5,
+  "warmup_runs": 1,
+  "dataset_counts": {
+    "exp1a": {
+      "products_rows": 10000,
+      "products_pages": 65
+    },
+    "exp1b": {
+      "order_items_rows": 200000,
+      "row_heap_pages": 1283,
+      "column_heap_pages": 197
+    },
+    "exp2a": {
+      "products_rows": 50000,
+      "index_ops_per_run": 10000,
+      "full_scan_sample_ops_per_run": 200,
+      "bpt_initial_size_mb": 2.2969,
+      "lsm_initial_size_mb": 0.9734
+    },
+    "exp2b": {
+      "inventory_rows": 50000,
+      "index_ops_per_run": 20000,
+      "full_scan_sample_ops_per_run": 200
+    },
+    "exp2c": {
+      "trace_ops": 4150,
+      "transitions_trial_0": [
+        {
+          "phase": "phase1_cold_start",
+          "ops": 150,
+          "window_n_ops": 150,
+          "alpha": 0.5,
+          "beta": 0.0,
+          "strategy": "FULL_SCAN"
+        },
+        {
+          "phase": "phase2_write_heavy_90",
+          "ops": 2000,
+          "window_n_ops": 1000,
+          "alpha": 0.896,
+          "beta": 0.0,
+          "strategy": "LSM_TREE"
+        },
+        {
+          "phase": "phase3_range_heavy_85",
+          "ops": 2000,
+          "window_n_ops": 1000,
+          "alpha": 0.047,
+          "beta": 0.8972,
+          "strategy": "BPLUS_TREE"
+        }
+      ]
+    },
+    "exp2d": {
+      "product_images_count": 500,
+      "total_raw_mb": 34.0083
+    }
+  },
+  "methodology": {
+    "protocol": "1 untimed warmup + N measured trials per configuration point with correctness assertions prior to timing export.",
+    "exp_2a_full_scan_sampling": "BPLUS_TREE and LSM_TREE execute all 10,000 operations (7,000 point, 2,000 width-20 range, 1,000 inserts). FULL_SCAN executes a stratified 200-operation representative sample (140 point, 40 range, 20 inserts) from the identical shuffled workload and records per-operation latencies (mean, median, p95) and ops/sec for apples-to-apples comparison.",
+    "exp_2b_full_scan_sampling": "BPLUS_TREE and LSM_TREE execute all 20,000 operations (18,000 stock updates/upserts, 2,000 point lookups) on a fresh copytree baseline per trial. FULL_SCAN executes a stratified 200-operation sample (180 updates, 20 point lookups) and reports exact per-operation latencies and ops/sec."
+  },
+  "total_elapsed_seconds": 642.812
+}
