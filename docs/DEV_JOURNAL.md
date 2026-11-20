@@ -24,3 +24,37 @@ Chronological engineering log documenting legacy audits, specification conflict 
   2. Standardized the SSTable EOF footer to `<8sQIIQIQQI8s` (exact `64` bytes: `magic`, `bloom_offset`, `bloom_len`, `num_hashes`, `index_offset`, `index_len`, `entry_count`, `bloom_num_bits`, `crc32`, `8B` padding).
   Both clarifications are documented in `docs/architecture.md`.
 * **Lesson / Guardrail Added:** Every `struct.Struct(...).size` in `src/` must match its documented byte span in `docs/architecture.md` and class ASCII diagrams, verified by Gate 1/2 binary packing tests.
+
+### [Wave 0 | src/common/types.py] Python `bool` Subclass Trap in `FLOAT64` Row Encoding
+* **Symptom / Failing Test:** Passing `True` or `False` into a `DataType.FLOAT64` column during `Schema.encode_row()` was accepted silently because Python's `bool` subclasses `int` (`isinstance(True, (int, float))` is `True`).
+* **Root Cause Analysis:** While `INT32`/`INT64`/`UINT64` checked `isinstance(val, bool)` explicitly, the `FLOAT64` branch omitted the `bool` guard and coerced booleans to `1.0`/`0.0`.
+* **Resolution:** Added an explicit `isinstance(val, bool)` rejection before type-checking numeric inputs in `Schema.encode_row()` (`cda45c2`), raising `TypeError` for booleans and strings.
+* **Lesson / Guardrail Added:** Added regression assertions in `test_common_key_encoding_total_order` covering `True`, `False`, `"9.99"`, and `np.float64` inputs.
+
+### [Wave 1 | src/storage/disk_manager.py] Page 0 FSM/Metadata Coexistence & Torn-Zero Distinction
+* **Symptom / Failing Test:** Page 0 stores both the 32-byte `PageHeader` (plus optional B+ Tree metadata at bytes `32..63` when `fsm_offset = 64`) and the Free Space Map bitmap (`fsm_offset..8191`), creating risk of stale buffer frames overwriting live FSM bits or FSM flushes wiping Page 0 metadata.
+* **Root Cause Analysis:**
+  1. Calling `write_page(0, buf)` from an older buffer pool copy could overwrite newer `allocate_page()`/`deallocate_page()` bits in `_fsm_bitmap`, whereas writing `_fsm_bitmap` blindly could erase bytes `0..fsm_offset - 1`.
+  2. Treating any Page 0 checksum mismatch on reopen as "uninitialized" would mask real Page 0 corruption, and Python `bool` arguments (`True`/`False`) pass `isinstance(..., int)` checks.
+* **Resolution:** Hardened `DiskManager` (`3a416e4`) so `_persist_fsm()` reads existing Page 0 bytes `0..fsm_offset - 1` before stamping the checksum, `write_page(0, data)` overlays the authoritative in-memory `_fsm_bitmap` onto `data[fsm_offset:]`, `_init_or_reload_file()` re-initializes only an exact all-zero Page 0 while raising `PageCorruptedError` on torn non-zero headers, and `_validate_page_id()` rejects `bool` values and out-of-range page IDs.
+* **Lesson / Guardrail Added:** Verified by `test_m1_torn_page_checksum_detection` and `test_m1_fsm_allocation_reuse` with persistent reopen checks.
+
+### [Wave 2 | src/storage/replacer.py & buffer_pool.py] `FIFOReplacer` Arrival Order vs. Cache Hits & Frame Allocation Atomicity
+* **Symptom / Failing Test:** Naive `OrderedDict` FIFO tracking that removes `frame_id` on `pin()` and appends it back on `unpin()` refreshes a frame's queue position on cache hits, violating `test_m1_fifo_eviction_order`; separately, allocating a disk page before reserving a buffer frame risks leaking an orphan FSM bit if all frames are pinned (`BufferPoolFullError`).
+* **Root Cause Analysis:**
+  1. `FIFOReplacer` must distinguish *temporarily pinned on a cache hit* (keep original arrival position in `_od`) from *permanently deleted from pool* (`delete_page()` clearing history).
+  2. In `BufferPoolManager`, failed `read_page()` or `allocate_page()` calls after popping from `_free_list` or evicting a victim require restoring clean frame metadata without dropping resident entries.
+* **Resolution:** Implemented `FIFOReplacer` using `_od: OrderedDict[int, None]` plus `_pinned: set[int]` (`_pinned <= _od.keys()`), formalized `ReplacementPolicy.remove(frame_id)` on the ABC (`2046315`), reserved/flushed the replacement frame in `new_page()` *before* calling `disk_manager.allocate_page()`, and reset `pin_count = 0`/`is_dirty = False` inside `_restore_unused_frame()`.
+* **Lesson / Guardrail Added:** `test_m1_fifo_eviction_order`, `test_m1_pin_protection_and_pool_full`, `test_m1_dirty_writeback_accuracy`, and `test_m1_hit_miss_telemetry` all pass (`5/5`).
+
+### [Wave 2 | src/storage/table_heap.py & storage_engine.py] Row Update Relocation Safety, Cross-Column Alignment, and Standalone Restart Persistence
+* **Symptom / Failing Test:** Gate 1 `test_m1_column_page_zero_copy_numpy` and `test_m1_persistence_across_restart` require coordinated multi-page row/column heaps, safe generator unpinning, and full restart recovery from `StorageEngine(db_dir)` without `CatalogManager`.
+* **Root Cause Analysis & Design Subtleties:**
+  1. **Row Update Relocation Safety:** In `RowTableHeap.update()`, deleting an overflowing slot prior to inserting the enlarged tuple could lose the original row if `BufferPoolManager.new_page()` raised `BufferPoolFullError`, whereas holding the old page pinned during relocation would fail on 1-frame buffer pools.
+  2. **Cross-Column Lockstep Alignment:** In `ColumnTableHeap`, partial `new_page()` failure on column $k$ or early `VARCHAR` page overflow could desynchronize `(page_id, slot_id)` across `.col` files, and `iter_column_pages()` / `iter_batches()` generators could leak pinned frames if callers `break` early.
+  3. **Standalone `StorageEngine` Registry:** `test_m1_persistence_across_restart` opens `StorageEngine` directly without `CatalogManager`, requiring the engine itself to remember created table schemas and layouts (`ROW` vs. `COLUMN`).
+* **Resolution:**
+  1. `RowTableHeap.update()` validates size limits upfront, unpins the full page when `SlottedPage.update_tuple()` returns `False`, inserts the relocated tuple via `_insert_payload()` first, and tombstones the old slot only after the new `RID` succeeds (maintaining `<= 1` pinned frame).
+  2. `ColumnTableHeap` caps `chunk_rows` to the tightest fixed-width capacity (`1020` for 8-byte scalars), computes minimum cross-column fit before writing `insert()`/`insert_batch()`, rolls back partially allocated column pages via `bpm.delete_page(pid)` on error, and wraps `iter_column_pages()` / `iter_batches()` yields in `try/finally` unpin blocks.
+  3. `StorageEngine` persists `storage_meta.json` atomically (`storage_meta.json.tmp -> os.fsync -> os.replace`) on `create_table()`, `flush_all()`, and `close()`, enabling automatic reload of `RowTableHeap`, `ColumnTableHeap`, and `ObjectStore`.
+* **Lesson / Guardrail Added:** Gate 1 (`pytest -v tests/test_m1_storage.py`) passed `12/12` in `0.55s`, and an edge-case verification confirmed zero pinned frames on early generator breaks, cross-page update relocation, and `200,000`-row `order_items` `insert_batch` (`1.141s`) + vectorized `iter_batches` sum (`0.0130s`).
