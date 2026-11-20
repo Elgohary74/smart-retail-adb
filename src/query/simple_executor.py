@@ -33,6 +33,7 @@ from typing import Any
 
 from src.common.exceptions import (
     DuplicateKeyError,
+    PageCorruptedError,
     QuerySyntaxError,
     SecurityViolationError,
     StorageError,
@@ -42,7 +43,7 @@ from src.index.base_index import BaseIndex
 from src.index.bplus_tree import BPlusTreeIndex
 from src.index.index_advisor import IndexStrategy, WorkloadAdvisor
 from src.index.lsm_tree import LSMTreeIndex
-from src.query.catalog import CatalogManager
+from src.query.catalog import CatalogManager, _validate_identifier
 from src.storage.storage_engine import StorageEngine, TableHeap
 from src.storage.table_heap import RowTableHeap
 
@@ -403,7 +404,7 @@ class SimpleExecutor:
         self._closed: bool = False
 
         self._indexes_by_col: dict[tuple[str, str], BaseIndex] = {}
-        self._indexes_by_name: dict[str, tuple[str, str, BaseIndex]] = {}
+        self._indexes_by_name: dict[tuple[str, str], tuple[str, BaseIndex]] = {}
         self._table_indexes: dict[str, list[tuple[str, str, BaseIndex]]] = {}
 
         try:
@@ -420,7 +421,7 @@ class SimpleExecutor:
 
     def _close_indexes_quietly(self) -> None:
         """Close all opened index handles during failed initialization."""
-        for _, _, idx in self._indexes_by_name.values():
+        for _, idx in self._indexes_by_name.values():
             try:
                 idx.close()
             except Exception:
@@ -430,18 +431,32 @@ class SimpleExecutor:
         self._table_indexes.clear()
 
     def _resolve_index_path(self, index_name: str, index_type: str, raw_path: Any) -> Path:
-        """Resolve an index path from catalog metadata with fallback to ``indexes_dir``."""
+        """Validate ``index_name`` and resolve an index path strictly inside ``self.indexes_dir``."""
+        _validate_identifier(index_name, "index")
+        indexes_root = self.indexes_dir.resolve()
+
         if raw_path:
-            candidate = Path(str(raw_path))
-            if candidate.is_absolute() or candidate.exists():
-                return candidate
-            local_fallback = self.indexes_dir / candidate.name
-            if local_fallback.exists():
-                return local_fallback
-            return candidate
-        if index_type == "BPLUS_TREE":
-            return self.indexes_dir / f"{index_name}.bpt"
-        return self.indexes_dir / index_name
+            raw_str = str(raw_path)
+            if "\x00" in raw_str:
+                raise SecurityViolationError(
+                    f"Invalid NUL byte in persisted index path {raw_str!r}"
+                )
+            candidate = Path(raw_str)
+            # Anchor relative paths strictly under self.indexes_dir rather than CWD.
+            resolved = (
+                candidate.resolve()
+                if candidate.is_absolute()
+                else (self.indexes_dir / candidate).resolve()
+            )
+        else:
+            default_name = f"{index_name}.bpt" if index_type == "BPLUS_TREE" else index_name
+            resolved = (self.indexes_dir / default_name).resolve()
+
+        if not resolved.is_relative_to(indexes_root) or resolved == indexes_root:
+            raise SecurityViolationError(
+                f"Index path {resolved} must reside strictly inside {indexes_root}"
+            )
+        return resolved
 
     def _open_index(
         self,
@@ -477,17 +492,23 @@ class SimpleExecutor:
     ) -> None:
         """Track an open index handle across executor lookup tables."""
         self._indexes_by_col[(table_name, column_name)] = idx
-        self._indexes_by_name[index_name] = (table_name, column_name, idx)
+        self._indexes_by_name[(table_name, index_name)] = (column_name, idx)
         self._table_indexes.setdefault(table_name, []).append(
             (index_name, column_name, idx)
         )
 
     def _reopen_persisted_indexes(self) -> None:
         """Reload every persisted index already registered in ``self._catalog``."""
+        seen_index_names: set[str] = set()
         for table_name in self._catalog.list_tables():
             schema = self._catalog.get_schema(table_name)
             indexes = self._catalog.get_indexes(table_name)
             for index_name, meta in indexes.items():
+                if index_name in seen_index_names:
+                    raise PageCorruptedError(
+                        f"Duplicate persisted index name {index_name!r} across tables"
+                    )
+                seen_index_names.add(index_name)
                 col_name = str(meta["column"])
                 col_def = schema.get_column(col_name)
                 index_type = _normalize_index_type(str(meta["type"]))
@@ -563,8 +584,9 @@ class SimpleExecutor:
         schema, heap = self._get_table_and_schema(stmt.table_name)
         col_def = self._require_column(schema, stmt.column_name)
 
-        if stmt.index_name in self._indexes_by_name or stmt.index_name in self._catalog.get_indexes(
-            stmt.table_name
+        if any(idx_name == stmt.index_name for _, idx_name in self._indexes_by_name) or any(
+            stmt.index_name in self._catalog.get_indexes(tbl)
+            for tbl in self._catalog.list_tables()
         ):
             raise StorageError(f"Index {stmt.index_name!r} already exists")
         if (stmt.table_name, stmt.column_name) in self._indexes_by_col:
@@ -589,11 +611,7 @@ class SimpleExecutor:
             index_type = "BPLUS_TREE"
 
         unique = stmt.column_name == schema.primary_key
-        idx_path = (
-            self.indexes_dir / f"{stmt.index_name}.bpt"
-            if index_type == "BPLUS_TREE"
-            else self.indexes_dir / stmt.index_name
-        )
+        idx_path = self._resolve_index_path(stmt.index_name, index_type, None)
         existed_before = idx_path.exists()
 
         idx = self._open_index(index_type, idx_path, col_def, unique)
@@ -1142,7 +1160,7 @@ class SimpleExecutor:
         """Flush all active indexes, underlying table heaps/objects, and ``catalog.json``."""
         with self._lock:
             self._ensure_open()
-            for _, _, idx in self._indexes_by_name.values():
+            for _, idx in self._indexes_by_name.values():
                 idx.flush()
             self._storage.flush_all()
             self._catalog.save()
@@ -1154,7 +1172,7 @@ class SimpleExecutor:
                 return
             first_exc: Exception | None = None
             try:
-                for _, _, idx in self._indexes_by_name.values():
+                for _, idx in self._indexes_by_name.values():
                     try:
                         idx.close()
                     except Exception as exc:

@@ -37,6 +37,22 @@ from src.common.exceptions import KeyNotFoundError, PageCorruptedError, StorageE
 from src.common.types import DataType, LayoutType, Schema
 
 
+def _validate_identifier(name: str, kind: str) -> None:
+    """Reject empty, dotted, whitespace-padded, or path-traversing identifiers."""
+    if (
+        not isinstance(name, str)
+        or not name
+        or name.strip() != name
+        or "/" in name
+        or "\\" in name
+        or "\x00" in name
+        or "." in name
+        or ".." in name
+        or Path(name).name != name
+    ):
+        raise ValueError(f"Invalid {kind} name {name!r}")
+
+
 def _write_all_fd(fd: int, data: bytes) -> None:
     """Write ``data`` completely to ``fd``, retrying partial OS writes."""
     mv = memoryview(data)
@@ -125,14 +141,16 @@ class CatalogManager:
                 f"Invalid catalog metadata structure in {self.catalog_path}"
             )
 
+        seen_index_names: set[str] = set()
         for table_name, entry in raw["tables"].items():
             if not isinstance(table_name, str) or not isinstance(entry, dict):
                 raise PageCorruptedError(
                     f"Invalid table entry {table_name!r} in {self.catalog_path}"
                 )
             try:
+                _validate_identifier(table_name, "table")
                 LayoutType(entry["layout"])
-                Schema.from_dict(
+                schema = Schema.from_dict(
                     {
                         "table_name": table_name,
                         "primary_key": entry.get("primary_key"),
@@ -145,7 +163,36 @@ class CatalogManager:
                 ) from exc
 
             entry.setdefault("column_stats", {})
-            entry.setdefault("indexes", {})
+            raw_indexes = entry.setdefault("indexes", {})
+            if not isinstance(raw_indexes, dict):
+                raise PageCorruptedError(
+                    f"Invalid indexes metadata for table {table_name!r} in {self.catalog_path}"
+                )
+            valid_cols = {col.name for col in schema.columns}
+            for idx_name, idx_meta in raw_indexes.items():
+                try:
+                    _validate_identifier(idx_name, "index")
+                except ValueError as exc:
+                    raise PageCorruptedError(
+                        f"Invalid index name {idx_name!r} on table {table_name!r} "
+                        f"in {self.catalog_path}: {exc}"
+                    ) from exc
+                if idx_name in seen_index_names:
+                    raise PageCorruptedError(
+                        f"Duplicate index name {idx_name!r} across tables in {self.catalog_path}"
+                    )
+                seen_index_names.add(idx_name)
+                if (
+                    not isinstance(idx_meta, dict)
+                    or idx_meta.get("column") not in valid_cols
+                    or not isinstance(idx_meta.get("type"), str)
+                    or not str(idx_meta["type"]).strip()
+                ):
+                    raise PageCorruptedError(
+                        f"Invalid index metadata for {idx_name!r} on table {table_name!r} "
+                        f"in {self.catalog_path}"
+                    )
+
             entry.setdefault("row_count", 0)
             entry.setdefault("page_count", 0)
 
@@ -182,6 +229,7 @@ class CatalogManager:
         """
         if not isinstance(schema, Schema):
             raise TypeError(f"schema must be a Schema, got {type(schema).__name__}")
+        _validate_identifier(schema.table_name, "table")
         resolved_layout = LayoutType(layout)
         path_str = str(file_path)
 
@@ -233,8 +281,7 @@ class CatalogManager:
             TypeError: If ``unique`` is not a ``bool``.
             StorageError: If ``index_name`` already exists or atomic save fails.
         """
-        if not isinstance(index_name, str) or not index_name.strip():
-            raise ValueError(f"index_name must be a non-empty str, got {index_name!r}")
+        _validate_identifier(index_name, "index")
         if not isinstance(index_type, str) or not index_type.strip():
             raise ValueError(f"index_type must be a non-empty str, got {index_type!r}")
         if not isinstance(unique, bool):
@@ -249,11 +296,13 @@ class CatalogManager:
                     f"Column {column!r} not found in table {table_name!r}"
                 )
 
+            for existing_tbl, existing_entry in self._data["tables"].items():
+                if index_name in existing_entry.get("indexes", {}):
+                    raise StorageError(
+                        f"Index {index_name!r} is already registered on table {existing_tbl!r}"
+                    )
+
             indexes: dict[str, Any] = entry.setdefault("indexes", {})
-            if index_name in indexes:
-                raise StorageError(
-                    f"Index {index_name!r} is already registered on table {table_name!r}"
-                )
 
             indexes[index_name] = {
                 "column": column,
@@ -445,6 +494,7 @@ class CatalogManager:
             tmp_path = self.catalog_path.with_name(f"{self.catalog_path.name}.tmp")
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
             fd: int | None = None
+            replaced = False
             try:
                 fd = os.open(os.fspath(tmp_path), flags, 0o644)
                 _write_all_fd(fd, payload_bytes)
@@ -452,15 +502,22 @@ class CatalogManager:
                 os.close(fd)
                 fd = None
                 os.replace(tmp_path, self.catalog_path)
+                replaced = True
             except OSError as exc:
+                raise StorageError(
+                    f"Failed persisting catalog {self.catalog_path}: {exc}"
+                ) from exc
+            finally:
                 if fd is not None:
                     try:
                         os.close(fd)
                     except OSError:
                         pass
-                raise StorageError(
-                    f"Failed persisting catalog {self.catalog_path}: {exc}"
-                ) from exc
+                if not replaced:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
 
 __all__ = ["CatalogManager"]
