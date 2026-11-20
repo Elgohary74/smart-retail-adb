@@ -337,6 +337,12 @@ class Schema:
                 chunks.append(_LE_U16.pack(len(encoded)))
                 chunks.append(encoded)
             elif col.dtype == DataType.FLOAT64:
+                if isinstance(val, bool) or not isinstance(
+                    val, (int, float, np.integer, np.floating)
+                ):
+                    raise TypeError(
+                        f"FLOAT64 column {col.name!r} expects float or int, got {type(val).__name__}"
+                    )
                 chunks.append(_LE_F64.pack(float(val)))
             else:
                 if isinstance(val, bool) or not isinstance(val, (int, np.integer)):

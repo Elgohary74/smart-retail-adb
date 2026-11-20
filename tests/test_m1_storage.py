@@ -128,6 +128,19 @@ def test_common_key_encoding_total_order() -> None:
         assert raw_k == base
         assert dec_r == r
 
+    # Schema.encode_row type enforcement for FLOAT64 (rejects bool and str, accepts numerics)
+    price_schema = Schema(
+        table_name="price_check",
+        columns=(ColumnDef("id", DataType.INT64), ColumnDef("price", DataType.FLOAT64)),
+        primary_key="id",
+    )
+    for valid_price in (10, 12.5, np.float64(99.25)):
+        encoded_row = price_schema.encode_row({"id": 1, "price": valid_price})
+        assert price_schema.decode_row(encoded_row) == {"id": 1, "price": float(valid_price)}
+    for bad_price in (True, False, "9.99"):
+        with pytest.raises(TypeError):
+            price_schema.encode_row({"id": 1, "price": bad_price})
+
 
 def test_m1_page_header_binary_packing() -> None:
     """Verify exact 32-byte PageHeader pack/unpack, checksums, and LSN hooks."""
