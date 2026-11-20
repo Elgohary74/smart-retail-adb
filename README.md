@@ -67,7 +67,38 @@ Quick dependency verification:
 
 ### Generate Retail Dataset (`seed=42`)
 ```bash
-.venv/bin/python -m bench.retail_loader --scale standard --seed 42
+# Standard scale (10k customers, 5k products, 50k orders, 200k order_items, 500 encrypted PNGs + 7 indexes)
+.venv/bin/python -m bench.retail_loader --scale standard --seed 42 --data-dir data
+
+# Fast tiny scale (500 customers, 250 products, 2k orders, 8k order_items, 25 encrypted PNGs)
+.venv/bin/python -m bench.retail_loader --scale tiny --seed 42 --data-dir /tmp/csai302_tiny
+
+# Skip index generation (tables + encrypted ObjectStore + catalog.json only)
+.venv/bin/python -m bench.retail_loader --scale tiny --seed 42 --data-dir /tmp/csai302_tiny --no-indexes
+```
+
+### Parameterized Query Shell (`SimpleExecutor`) Usage
+```python
+import hashlib
+from src.query import CatalogManager, SimpleExecutor
+from src.storage import AES256GCMHook, StorageEngine
+
+key = hashlib.sha256(b"csai302-retail-master-key").digest()
+engine = StorageEngine("data", buffer_pool_size=64, cipher=AES256GCMHook(key))
+engine.open()
+catalog = CatalogManager("data/catalog.json")
+executor = SimpleExecutor(engine, catalog)
+
+try:
+    # Point lookup via idx_customers_pk (BPlusTreeIndex)
+    customer = executor.execute("SELECT * FROM customers WHERE customer_id = ?", (1,))
+    # Range scan via idx_products_price (BPlusTreeIndex)
+    mid_tier = executor.execute("SELECT * FROM products WHERE price BETWEEN ? AND ?", (50.0, 200.0))
+    # WorkloadAdvisor-guided index DDL (USING BTREE | LSM | AUTO)
+    # executor.execute("CREATE INDEX idx_orders_cust ON orders (customer_id) USING AUTO")
+finally:
+    executor.close()
+    engine.close()
 ```
 
 ### Gate 3 — Full M1 + M2 Benchmarks & Plots
