@@ -72,5 +72,5 @@
     "exp_2a_full_scan_sampling": "BPLUS_TREE and LSM_TREE execute all 10,000 operations (7,000 point, 2,000 width-20 range, 1,000 inserts). FULL_SCAN executes a stratified 200-operation representative sample (140 point, 40 range, 20 inserts) from the identical shuffled workload and records per-operation latencies (mean, median, p95) and ops/sec for apples-to-apples comparison.",
     "exp_2b_full_scan_sampling": "BPLUS_TREE and LSM_TREE execute all 20,000 operations (18,000 stock updates/upserts, 2,000 point lookups) on a fresh copytree baseline per trial. FULL_SCAN executes a stratified 200-operation sample (180 updates, 20 point lookups) and reports exact per-operation latencies and ops/sec."
   },
-  "total_elapsed_seconds": 642.812
+  "total_elapsed_seconds": 651.844
 }

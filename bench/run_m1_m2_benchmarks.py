@@ -102,6 +102,8 @@ _RAW_CSV_FIELDS: tuple[str, ...] = (
     "storage_overhead_pct",
     "flushes",
     "compactions",
+    "advisor_alpha",
+    "advisor_beta",
 )
 
 _SUMMARY_CSV_FIELDS: tuple[str, ...] = (
@@ -134,6 +136,10 @@ _SUMMARY_CSV_FIELDS: tuple[str, ...] = (
     "storage_overhead_pct",
     "mean_flushes",
     "mean_compactions",
+    "mean_advisor_alpha",
+    "std_advisor_alpha",
+    "mean_advisor_beta",
+    "std_advisor_beta",
 )
 
 
@@ -163,6 +169,8 @@ class RawRunRecord:
     storage_overhead_pct: float = 0.0
     flushes: int = 0
     compactions: int = 0
+    advisor_alpha: float = 0.0
+    advisor_beta: float = 0.0
 
 
 def _dir_size_bytes(path: Path) -> int:
@@ -1274,8 +1282,8 @@ def _run_exp_2c(runs: int, seed: int) -> tuple[list[RawRunRecord], dict[str, Any
                         mean_op_ms=elapsed_ms / ops_cnt,
                         median_op_ms=elapsed_ms / ops_cnt,
                         p95_op_ms=elapsed_ms / ops_cnt,
-                        hit_ratio=alpha,
-                        disk_size_mb=beta,
+                        advisor_alpha=alpha,
+                        advisor_beta=beta,
                     )
                 )
 
@@ -1423,6 +1431,8 @@ def _aggregate_summary(raw_records: Sequence[RawRunRecord]) -> list[dict[str, An
         overheads = np.asarray([r.storage_overhead_pct for r in group], dtype=np.float64)
         flushes = np.asarray([r.flushes for r in group], dtype=np.float64)
         compactions = np.asarray([r.compactions for r in group], dtype=np.float64)
+        alphas = np.asarray([r.advisor_alpha for r in group], dtype=np.float64)
+        betas = np.asarray([r.advisor_beta for r in group], dtype=np.float64)
 
         row = {
             "experiment": exp,
@@ -1464,6 +1474,14 @@ def _aggregate_summary(raw_records: Sequence[RawRunRecord]) -> list[dict[str, An
             "storage_overhead_pct": round(float(np.mean(overheads)), 6),
             "mean_flushes": round(float(np.mean(flushes)), 2),
             "mean_compactions": round(float(np.mean(compactions)), 2),
+            "mean_advisor_alpha": round(float(np.mean(alphas)), 6),
+            "std_advisor_alpha": round(
+                float(np.std(alphas, ddof=1 if len(group) > 1 else 0)), 6
+            ),
+            "mean_advisor_beta": round(float(np.mean(betas)), 6),
+            "std_advisor_beta": round(
+                float(np.std(betas, ddof=1 if len(group) > 1 else 0)), 6
+            ),
         }
         for k, v in row.items():
             if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
@@ -1745,12 +1763,12 @@ def _plot_fig4(summary: Sequence[dict[str, Any]], out_path: Path) -> None:
     l1 = ax1.bar(
         x + width / 2, lsm_p95, width, yerr=lsm_p95_err, capsize=4, label="LSM Tree", color="#2ca02c"
     )
-    for bars in (b1, l1):
-        for bar in bars:
+    for bars, stds in ((b1, bpt_p95_err), (l1, lsm_p95_err)):
+        for bar, std in zip(bars, stds, strict=True):
             h = bar.get_height()
             ax1.text(
                 bar.get_x() + bar.get_width() / 2,
-                h + max(bpt_p95 + lsm_p95) * 0.03,
+                h + std + max(bpt_p95 + lsm_p95) * 0.03,
                 f"{h:.4f} ms",
                 ha="center",
                 va="bottom",
@@ -1772,12 +1790,12 @@ def _plot_fig4(summary: Sequence[dict[str, Any]], out_path: Path) -> None:
     l2 = ax2.bar(
         x + width / 2, lsm_sz, width, yerr=lsm_sz_err, capsize=4, label="LSM Tree", color="#2ca02c"
     )
-    for bars in (b2, l2):
-        for bar in bars:
+    for bars, stds in ((b2, bpt_sz_err), (l2, lsm_sz_err)):
+        for bar, std in zip(bars, stds, strict=True):
             h = bar.get_height()
             ax2.text(
                 bar.get_x() + bar.get_width() / 2,
-                h + max(bpt_sz + lsm_sz) * 0.03,
+                h + std + max(bpt_sz + lsm_sz) * 0.03,
                 f"{h:.2f} MB",
                 ha="center",
                 va="bottom",
