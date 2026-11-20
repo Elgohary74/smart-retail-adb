@@ -108,47 +108,76 @@ class DiskManager:
             raise StorageError(f"Failed to open page file {self.file_path}: {exc}") from exc
 
         try:
-            file_size = os.fstat(self._fd).st_size
-            if file_size == 0:
-                self._fsm_bitmap = bytearray(self._fsm_bytes)
-                # Page 0 itself is permanently reserved for the FSM and metadata.
-                self._fsm_bitmap[0] = 0x01
-                self._num_pages = 1
-
-                page0 = bytearray(PAGE_SIZE)
-                PageHeader(
-                    page_id=0,
-                    page_type=PageType.FREE_OR_FSM,
-                    flags=PageFlags.NONE,
-                    slot_count=0,
-                    page_lsn=0,
-                    free_space_ptr=self.fsm_offset,
-                    next_page_id=INVALID_PAGE_ID,
-                    checksum=0,
-                ).pack_into(page0, 0)
-                page0[self.fsm_offset :] = self._fsm_bitmap
-                PageHeader.stamp_checksum(page0)
-                self._pwrite_exact(0, page0)
-                os.fsync(self._fd)
-            else:
-                if file_size < PAGE_SIZE or file_size % PAGE_SIZE != 0:
-                    raise StorageError(
-                        f"Invalid page file size {file_size} for {self.file_path}; "
-                        f"expected non-zero multiple of {PAGE_SIZE}"
-                    )
-                self._num_pages = file_size // PAGE_SIZE
-                raw0 = self._pread_exact(0, PAGE_SIZE)
-                if raw0 != _ZERO_PAGE and not PageHeader.verify_checksum(raw0):
-                    raise PageCorruptedError(
-                        f"Page 0 FSM checksum mismatch in {self.file_path}"
-                    )
-                self._fsm_bitmap = bytearray(raw0[self.fsm_offset :])
-                self._fsm_bitmap[0] |= 0x01
+            self._init_or_reload_file()
         except Exception:
             if self._fd is not None:
                 os.close(self._fd)
                 self._fd = None
             raise
+
+    def _write_initial_page0(self) -> None:
+        """Initialize Page 0 header, mark Page 0 allocated, and sync to disk."""
+        self._fsm_bitmap = bytearray(self._fsm_bytes)
+        # Page 0 itself is permanently reserved for the FSM and metadata.
+        self._fsm_bitmap[0] = 0x01
+
+        page0 = bytearray(PAGE_SIZE)
+        PageHeader(
+            page_id=0,
+            page_type=PageType.FREE_OR_FSM,
+            flags=PageFlags.NONE,
+            slot_count=0,
+            page_lsn=0,
+            free_space_ptr=self.fsm_offset,
+            next_page_id=INVALID_PAGE_ID,
+            checksum=0,
+        ).pack_into(page0, 0)
+        page0[self.fsm_offset :] = self._fsm_bitmap
+        PageHeader.stamp_checksum(page0)
+        self._pwrite_exact(0, page0)
+        os.fsync(self._ensure_open())
+
+    def _init_or_reload_file(self) -> None:
+        """Initialize a fresh Page 0 FSM or checksum-verify and reload an existing file."""
+        fd = self._ensure_open()
+        file_size = os.fstat(fd).st_size
+        if file_size == 0:
+            self._num_pages = 1
+            self._write_initial_page0()
+            return
+
+        if file_size < PAGE_SIZE or file_size % PAGE_SIZE != 0:
+            raise StorageError(
+                f"Invalid page file size {file_size} for {self.file_path}; "
+                f"expected non-zero multiple of {PAGE_SIZE}"
+            )
+
+        self._num_pages = file_size // PAGE_SIZE
+        page0 = self._pread_exact(0, PAGE_SIZE)
+        if not PageHeader.verify_checksum(page0):
+            if page0 == _ZERO_PAGE:
+                # Only an all-zero Page 0 is uninitialized; never overwrite torn bytes.
+                self._write_initial_page0()
+                return
+            raise PageCorruptedError(
+                f"Page 0 FSM checksum mismatch in {self.file_path}"
+            )
+        self._fsm_bitmap = bytearray(page0[self.fsm_offset :])
+        self._fsm_bitmap[0] |= 0x01
+
+    def _validate_page_id(self, page_id: int, *, allow_zero: bool) -> None:
+        """Validate that ``page_id`` is a non-bool integer within file page bounds."""
+        if not isinstance(page_id, int) or isinstance(page_id, bool):
+            raise StorageError(
+                f"Page ID must be an int, got {type(page_id).__name__}"
+            )
+        if not allow_zero and page_id == 0:
+            raise StorageError("Cannot deallocate reserved FSM Page 0")
+        min_pid = 0 if allow_zero else 1
+        if page_id < min_pid or page_id >= self._num_pages:
+            raise StorageError(
+                f"Page ID {page_id} out of range [{min_pid}, {self._num_pages - 1}]"
+            )
 
     def _ensure_open(self) -> int:
         """Return the active file descriptor or raise ``StorageError`` if closed."""
@@ -300,12 +329,7 @@ class DiskManager:
         """
         with self._lock:
             self._ensure_open()
-            if page_id == 0:
-                raise StorageError("Cannot deallocate reserved FSM Page 0")
-            if page_id < 0 or page_id >= self._num_pages:
-                raise StorageError(
-                    f"Page ID {page_id} out of range [1, {self._num_pages - 1}]"
-                )
+            self._validate_page_id(page_id, allow_zero=False)
             self._clear_bit(page_id)
             self._pwrite_exact(page_id * PAGE_SIZE, _ZERO_PAGE)
             self._persist_fsm()
@@ -335,10 +359,7 @@ class DiskManager:
         """
         with self._lock:
             self._ensure_open()
-            if page_id < 0 or page_id >= self._num_pages:
-                raise StorageError(
-                    f"Page ID {page_id} out of range [0, {self._num_pages - 1}]"
-                )
+            self._validate_page_id(page_id, allow_zero=True)
             buf = self._pread_exact(page_id * PAGE_SIZE, PAGE_SIZE)
             self.disk_reads += 1
             # Newly allocated or deallocated pages are zero-filled before first use.
@@ -373,10 +394,7 @@ class DiskManager:
                 raise StorageError(
                     f"Expected {PAGE_SIZE}-byte page buffer, got {len(data)}"
                 )
-            if page_id < 0 or page_id >= self._num_pages:
-                raise StorageError(
-                    f"Page ID {page_id} out of range [0, {self._num_pages - 1}]"
-                )
+            self._validate_page_id(page_id, allow_zero=True)
             buf = bytearray(data)
             if page_id == 0:
                 # Never allow an older Page 0 frame copy to overwrite live FSM allocations.
@@ -403,6 +421,10 @@ class DiskManager:
         """
         with self._lock:
             self._ensure_open()
+            if not isinstance(page_id, int) or isinstance(page_id, bool):
+                raise StorageError(
+                    f"Page ID must be an int, got {type(page_id).__name__}"
+                )
             if page_id < 0 or page_id >= self._max_pages:
                 return False
             return self._get_bit(page_id)
