@@ -872,11 +872,12 @@ class SimpleExecutor:
             tuple[RID, RID, dict[str, Any], dict[str, Any], dict[str, tuple[bool, bool]]]
         ] = []
         for rid, old_row, new_row in prepared_updates:
-            new_rid = heap.update(rid, new_row)
-            rid_changed = new_rid != rid
+            new_rid: RID | None = None
             idx_ops: dict[str, tuple[bool, bool]] = {}
 
             try:
+                new_rid = heap.update(rid, new_row)
+                rid_changed = new_rid != rid
                 for idx_name, idx_col, idx in active_indexes:
                     col_def = schema.get_column(idx_col)
                     old_val = old_row[idx_col]
@@ -891,9 +892,10 @@ class SimpleExecutor:
                         idx.insert(new_val, new_rid)
                         idx_ops[idx_name] = (True, True)
             except Exception:
-                self._rollback_single_update_row(
-                    heap, active_indexes, rid, new_rid, old_row, new_row, idx_ops
-                )
+                if new_rid is not None:
+                    self._rollback_single_update_row(
+                        heap, active_indexes, rid, new_rid, old_row, new_row, idx_ops
+                    )
                 for comp_rid, comp_new_rid, comp_old, comp_new, comp_ops in reversed(
                     completed_rows
                 ):

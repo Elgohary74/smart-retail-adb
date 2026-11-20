@@ -499,8 +499,9 @@ class CatalogManager:
                 fd = os.open(os.fspath(tmp_path), flags, 0o644)
                 _write_all_fd(fd, payload_bytes)
                 os.fsync(fd)
-                os.close(fd)
+                fd_to_close = fd
                 fd = None
+                os.close(fd_to_close)
                 os.replace(tmp_path, self.catalog_path)
                 replaced = True
             except OSError as exc:
