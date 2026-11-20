@@ -4,5 +4,6 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 retail_data/
+retail_benchmark_data/
 benchmark_results/
 *.tmp
