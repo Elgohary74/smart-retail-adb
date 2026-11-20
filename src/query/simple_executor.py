@@ -736,6 +736,44 @@ class SimpleExecutor:
             if low_val <= row[stmt.column_name] <= high_val
         ]
 
+    @staticmethod
+    def _rollback_single_update_row(
+        heap: RowTableHeap,
+        active_indexes: list[tuple[str, str, BaseIndex]],
+        orig_rid: RID,
+        new_rid: RID,
+        old_row: dict[str, Any],
+        new_row: dict[str, Any],
+        idx_ops: dict[str, tuple[bool, bool]],
+    ) -> None:
+        """Revert a single updated row and keep every active index aligned with the live RID."""
+        try:
+            reverted_rid = heap.update(new_rid, old_row)
+        except Exception:
+            if new_rid != orig_rid and heap.delete(new_rid):
+                reverted_rid = heap.insert(old_row)
+            else:
+                raise
+
+        for idx_name, idx_col, idx in active_indexes:
+            did_del, did_ins = idx_ops.get(idx_name, (False, False))
+            old_val = old_row[idx_col]
+            new_val = new_row[idx_col]
+            try:
+                if did_ins:
+                    idx.delete(new_val, new_rid)
+                if reverted_rid == orig_rid:
+                    if did_del:
+                        idx.insert(old_val, reverted_rid)
+                else:
+                    # Cross-page relocation tombstoned orig_rid; move untouched or partially
+                    # rolled-back entries onto the live reverted_rid.
+                    if not did_del:
+                        idx.delete(old_val, orig_rid)
+                    idx.insert(old_val, reverted_rid)
+            except Exception:
+                pass
+
     def _execute_update(
         self, stmt: _UpdateStmt, params: Sequence[Any]
     ) -> int:
@@ -770,6 +808,35 @@ class SimpleExecutor:
             for col_name, new_val in zip(stmt.set_columns, set_vals):
                 new_row[col_name] = new_val
             schema.encode_row(new_row)
+
+            if schema.primary_key is not None and schema.primary_key in stmt.set_columns:
+                pk_col = schema.primary_key
+                pk_def = schema.get_column(pk_col)
+                old_pk_enc = _validate_col_key(pk_def, old_row[pk_col])
+                new_pk_enc = _validate_col_key(pk_def, new_row[pk_col])
+                if old_pk_enc != new_pk_enc:
+                    if len(matches) > 1:
+                        raise DuplicateKeyError(
+                            f"Duplicate key {new_row[pk_col]!r} for primary key "
+                            f"{stmt.table_name}.{pk_col}"
+                        )
+                    pk_idx = self._indexes_by_col.get((stmt.table_name, pk_col))
+                    if pk_idx is not None:
+                        if pk_idx.get(new_row[pk_col]):
+                            raise DuplicateKeyError(
+                                f"Duplicate key {new_row[pk_col]!r} for primary key "
+                                f"{stmt.table_name}.{pk_col}"
+                            )
+                    elif any(
+                        other_rid != rid
+                        and _validate_col_key(pk_def, other_row[pk_col]) == new_pk_enc
+                        for other_rid, other_row in heap.full_scan()
+                    ):
+                        raise DuplicateKeyError(
+                            f"Duplicate key {new_row[pk_col]!r} for primary key "
+                            f"{stmt.table_name}.{pk_col}"
+                        )
+
             for _idx_name, idx_col, idx in active_indexes:
                 col_def = schema.get_column(idx_col)
                 old_encoded = _validate_col_key(col_def, old_row[idx_col])
@@ -783,26 +850,54 @@ class SimpleExecutor:
                         )
             prepared_updates.append((rid, old_row, new_row))
 
+        completed_rows: list[
+            tuple[RID, RID, dict[str, Any], dict[str, Any], dict[str, tuple[bool, bool]]]
+        ] = []
         for rid, old_row, new_row in prepared_updates:
             new_rid = heap.update(rid, new_row)
             rid_changed = new_rid != rid
+            idx_ops: dict[str, tuple[bool, bool]] = {}
 
-            for _idx_name, idx_col, idx in active_indexes:
-                col_def = schema.get_column(idx_col)
-                old_val = old_row[idx_col]
-                new_val = new_row[idx_col]
-                key_changed = _validate_col_key(col_def, old_val) != _validate_col_key(
-                    col_def, new_val
+            try:
+                for idx_name, idx_col, idx in active_indexes:
+                    col_def = schema.get_column(idx_col)
+                    old_val = old_row[idx_col]
+                    new_val = new_row[idx_col]
+                    key_changed = _validate_col_key(col_def, old_val) != _validate_col_key(
+                        col_def, new_val
+                    )
+                    # Update index when indexed value changes OR cross-page relocation altered RID.
+                    if key_changed or rid_changed:
+                        idx.delete(old_val, rid)
+                        idx_ops[idx_name] = (True, False)
+                        idx.insert(new_val, new_rid)
+                        idx_ops[idx_name] = (True, True)
+            except Exception:
+                self._rollback_single_update_row(
+                    heap, active_indexes, rid, new_rid, old_row, new_row, idx_ops
                 )
-                # Update index when indexed value changes OR cross-page relocation altered RID.
-                if key_changed or rid_changed:
-                    idx.delete(old_val, rid)
-                    idx.insert(new_val, new_rid)
+                for comp_rid, comp_new_rid, comp_old, comp_new, comp_ops in reversed(
+                    completed_rows
+                ):
+                    self._rollback_single_update_row(
+                        heap,
+                        active_indexes,
+                        comp_rid,
+                        comp_new_rid,
+                        comp_old,
+                        comp_new,
+                        comp_ops,
+                    )
+                raise
 
+            completed_rows.append((rid, new_rid, old_row, new_row, idx_ops))
+
+        cur_page_count = heap.page_count()
+        for _rid, _new_rid, _old_row, new_row, _ops in completed_rows:
             self._catalog.update_table_stats(
                 stmt.table_name,
                 row_delta=0,
-                page_count=heap.page_count(),
+                page_count=cur_page_count,
                 row_values=new_row,
             )
 
@@ -833,11 +928,37 @@ class SimpleExecutor:
 
         active_indexes = self._table_indexes.get(stmt.table_name, [])
         deleted_count = 0
+        completed_deletes: list[tuple[RID, dict[str, Any], bool]] = []
         for rid, old_row in matches:
-            for _idx_name, idx_col, idx in active_indexes:
-                idx.delete(old_row[idx_col], rid)
-            if heap.delete(rid):
-                deleted_count += 1
+            deleted_from_indexes: list[tuple[BaseIndex, Any]] = []
+            try:
+                for _idx_name, idx_col, idx in active_indexes:
+                    key_val = old_row[idx_col]
+                    if idx.delete(key_val, rid):
+                        deleted_from_indexes.append((idx, key_val))
+                was_deleted = heap.delete(rid)
+                if was_deleted:
+                    deleted_count += 1
+                completed_deletes.append((rid, old_row, was_deleted))
+            except Exception:
+                for d_idx, d_key in reversed(deleted_from_indexes):
+                    try:
+                        d_idx.insert(d_key, rid)
+                    except Exception:
+                        pass
+                for comp_rid, comp_row, comp_was_deleted in reversed(completed_deletes):
+                    try:
+                        restored_rid = (
+                            heap.insert(comp_row) if comp_was_deleted else comp_rid
+                        )
+                        for _idx_name, idx_col, idx in active_indexes:
+                            try:
+                                idx.insert(comp_row[idx_col], restored_rid)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                raise
 
         self._catalog.update_table_stats(
             stmt.table_name,
