@@ -77,11 +77,11 @@ class ObjectStore:
     |<----------------- CRC32 Input Scope (48 + C Bytes) ----------------------->|                 |
 
     objects.dir — Atomic Object Directory Snapshot:
-    0      4             8                       32                       32+24*(N-1)        8+24*N
-    +------+-------------+-----------------------+------------------------+------------------------+
-    |magic | entry_count | Entry 0 (<QQII)       | Entry 1 (<QQII)        | ... Entry N-1 (<QQII)  |
-    |"ODIR"|   uint32    | oid|off|clen|rlen     | oid|off|clen|rlen      | oid|off|clen|rlen      |
-    +------+-------------+-----------------------+------------------------+------------------------+
+    0      4             8                       32                       56    8+24*(N-1)               8+24*N
+    +------+-------------+-----------------------+------------------------+-----+------------------------+
+    |magic | entry_count | Entry 0 (<QQII)       | Entry 1 (<QQII)        | ... | Entry N-1 (<QQII)      |
+    |"ODIR"|   uint32    | oid|off|clen|rlen     | oid|off|clen|rlen      | ... | oid|off|clen|rlen      |
+    +------+-------------+-----------------------+------------------------+-----+------------------------+
     Each Directory Entry (24 Bytes, <QQII):
       0..7   (Q): oid         (uint64)
       8..15  (Q): file_offset (uint64)

@@ -442,11 +442,14 @@ def load_retail_dataset(
     _validate_scale(scale)
     _validate_seed(seed)
 
-    key = (
-        bytes(encryption_key)
-        if encryption_key is not None
-        else _default_encryption_key()
-    )
+    if encryption_key is None:
+        key = _default_encryption_key()
+    elif isinstance(encryption_key, (bytes, bytearray, memoryview)):
+        key = bytes(encryption_key)
+    else:
+        raise TypeError(
+            f"encryption_key must be bytes-like or None, got {type(encryption_key).__name__}"
+        )
     cipher = AES256GCMHook(key)
 
     dataset = RetailDataGenerator(seed=seed).generate(scale=scale)

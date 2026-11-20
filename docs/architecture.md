@@ -20,7 +20,7 @@
 ```text
 +-----------------------------------------------------------------------------------+
 |                        CLIENT / BENCHMARK / TEST HARNESS                          |
-|   tests/test_m1_storage.py  |  tests/test_m2_indexing.py  |  bench/benchmarks.py  |
+| tests/test_m1_storage.py | tests/test_m2_indexing.py|bench/run_m1_m2_benchmarks.py |
 +-----------------------------------------+-----------------------------------------+
                                           |
                                           v
@@ -84,7 +84,7 @@
 |                   PERSISTENCE & DISK LAYER (src/storage/) [M1 + M2]               |
 |  +-----------------------------------------------------------------------------+  |
 |  | Unified StorageEngine & DiskManager                                         |  |
-|  | - Page 0 Free Space Map (FSM) Bitmap  |  CRC64 Torn-Page Verification       |  |
+|  | - Page 0 Free Space Map (FSM) Bitmap  |  BLAKE2b-64 Torn-Page Verification  |  |
 |  | - Aligned 8KB OS I/O (pread / pwrite / fsync)                               |  |
 |  +-----------------------------------------------------------------------------+  |
 +-----------------------------------------------------------------------------------+
@@ -321,11 +321,11 @@ Every B+ Tree node lives inside an `8,192`-byte buffer-pool page, giving high fa
                           |          |         |
             +-------------+          |         +-------------+
             v                        v                       v
-+-----------------------+  +-----------------------+  +-----------------------+
-| Leaf Node (Page 1,t=4)|  | Leaf Node (Page 2,t=4)|  | Leaf Node (Page 3,t=4)|
-| (10,RID) (45,RID) ... |->| (500,RID) (720,RID)...|->| (1200,RID) ...        |
-| next_page_id = 2      |  | next_page_id = 3      |  | next_page_id = 0xFFFF |
-+-----------------------+  +-----------------------+  +-----------------------+
++-----------------------+  +-----------------------+  +---------------------------+
+| Leaf Node (Page 1,t=4)|  | Leaf Node (Page 2,t=4)|  | Leaf Node (Page 3, t=4)   |
+| (10,RID) (45,RID) ... |->| (500,RID) (720,RID)...|->| (1200,RID) ...            |
+| next_page_id = 2      |  | next_page_id = 3      |  | next_page_id = 0xFFFFFFFF |
++-----------------------+  +-----------------------+  +---------------------------+
 ```
 
 * **Metadata Page (`page_id = 0`, `fsm_offset = 64`):** Bytes `0..31` store `PageHeader`; bytes `32..55` pack `<IBHHQ?6x` (`root_page_id: uint32`, `key_dtype: uint8`, `key_size: uint16`, `height: uint16`, `entry_count: uint64`, `unique: bool`, 6-byte padding); bytes `64..8191` store the `65,024`-page FSM bitmap.

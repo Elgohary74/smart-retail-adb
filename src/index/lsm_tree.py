@@ -137,7 +137,12 @@ def _write_all_fd(fd: int, data: bytes | bytearray | memoryview) -> None:
     written = 0
     total = len(mv)
     while written < total:
-        n = os.write(fd, mv[written:])
+        try:
+            n = os.write(fd, mv[written:])
+        except OSError as exc:
+            raise StorageError(
+                f"Failed writing {total - written} bytes to fd {fd}: {exc}"
+            ) from exc
         if n <= 0:
             raise StorageError(f"Short write on fd {fd}: wrote {written} of {total} bytes")
         written += n
@@ -149,11 +154,16 @@ def _pwrite_all_fd(fd: int, data: bytes | bytearray | memoryview, offset: int) -
     written = 0
     total = len(mv)
     while written < total:
-        if _HAS_PWRITE:
-            n = os.pwrite(fd, mv[written:], offset + written)
-        else:
-            os.lseek(fd, offset + written, os.SEEK_SET)
-            n = os.write(fd, mv[written:])
+        try:
+            if _HAS_PWRITE:
+                n = os.pwrite(fd, mv[written:], offset + written)
+            else:
+                os.lseek(fd, offset + written, os.SEEK_SET)
+                n = os.write(fd, mv[written:])
+        except OSError as exc:
+            raise StorageError(
+                f"Failed positional write at offset {offset + written}: {exc}"
+            ) from exc
         if n <= 0:
             raise StorageError(
                 f"Short positional write at offset {offset}: wrote {written} of {total} bytes"
@@ -667,7 +677,10 @@ class SSTable:
             final_crc = zlib.crc32(footer_prefix, running_crc) & _UINT32_MAX
             footer_bytes = footer_prefix + _FOOTER_TAIL_STRUCT.pack(final_crc, _ZERO_PADDING_8)
             _write_all_fd(fd, footer_bytes)
-            os.fsync(fd)
+            try:
+                os.fsync(fd)
+            except OSError as exc:
+                raise StorageError(f"Failed syncing SSTable {tmp_path}: {exc}") from exc
         except Exception:
             os.close(fd)
             tmp_path.unlink(missing_ok=True)
@@ -1272,8 +1285,9 @@ class LSMTreeIndex(BaseIndex):
         for tmp in self.directory.glob("*.tmp"):
             tmp.unlink(missing_ok=True)
 
-    def _persist_manifest(self) -> None:
+    def _persist_manifest(self, levels: dict[int, list[SSTable]] | None = None) -> None:
         """Atomically persist ``manifest.json`` via temp-write, ``os.fsync``, and ``os.replace``."""
+        target_levels = self._levels if levels is None else levels
         payload = {
             "version": 1,
             "key_dtype": self._key_dtype.name,
@@ -1282,20 +1296,34 @@ class LSMTreeIndex(BaseIndex):
             "next_seq": self._next_seq,
             "levels": {
                 str(lvl): [sst.file_path.name for sst in ssts]
-                for lvl, ssts in sorted(self._levels.items())
+                for lvl, ssts in sorted(target_levels.items())
                 if ssts
             },
         }
         raw = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
         tmp_path = self.directory / "manifest.json.tmp"
         open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
-        fd = os.open(os.fspath(tmp_path), open_flags, 0o644)
         try:
-            _write_all_fd(fd, raw)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.replace(tmp_path, self._manifest_path)
+            fd = os.open(os.fspath(tmp_path), open_flags, 0o644)
+        except OSError as exc:
+            raise StorageError(
+                f"Failed opening manifest temp file {tmp_path}: {exc}"
+            ) from exc
+        try:
+            try:
+                _write_all_fd(fd, raw)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(tmp_path, self._manifest_path)
+        except OSError as exc:
+            tmp_path.unlink(missing_ok=True)
+            raise StorageError(
+                f"Failed persisting LSM manifest {self._manifest_path}: {exc}"
+            ) from exc
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     def _load_or_init_manifest(self) -> None:
         """Load and validate ``manifest.json`` on reopen, or initialize a new manifest."""
@@ -1338,7 +1366,12 @@ class LSMTreeIndex(BaseIndex):
         loaded_levels: dict[int, list[SSTable]] = {}
         try:
             for lvl_str, filenames in levels_raw.items():
-                lvl = int(lvl_str)
+                try:
+                    lvl = int(lvl_str)
+                except (ValueError, TypeError) as exc:
+                    raise PageCorruptedError(
+                        f"Invalid level entry {lvl_str!r} in manifest"
+                    ) from exc
                 if lvl < 0 or not isinstance(filenames, list):
                     raise PageCorruptedError(f"Invalid level entry {lvl_str!r} in manifest")
                 ssts: list[SSTable] = []
@@ -1367,7 +1400,10 @@ class LSMTreeIndex(BaseIndex):
             raise StorageError(f"Failed to open LSM WAL {self._wal_path}: {exc}") from exc
 
         self._wal_fd = fd
-        file_size = os.fstat(fd).st_size
+        try:
+            file_size = os.fstat(fd).st_size
+        except OSError as exc:
+            raise StorageError(f"Failed stating LSM WAL {self._wal_path}: {exc}") from exc
         if file_size == 0:
             self._wal_offset = 0
             return
@@ -1399,11 +1435,14 @@ class LSMTreeIndex(BaseIndex):
             pos += rec_len
             valid_end = pos
 
-        if valid_end < file_size:
-            # Truncate corrupt/incomplete tail so subsequent WAL appends stay contiguous.
-            os.ftruncate(fd, valid_end)
-            os.fsync(fd)
-        os.lseek(fd, valid_end, os.SEEK_SET)
+        try:
+            if valid_end < file_size:
+                # Truncate corrupt/incomplete tail so subsequent WAL appends stay contiguous.
+                os.ftruncate(fd, valid_end)
+                os.fsync(fd)
+            os.lseek(fd, valid_end, os.SEEK_SET)
+        except OSError as exc:
+            raise StorageError(f"Failed positioning LSM WAL {self._wal_path}: {exc}") from exc
         self._wal_offset = valid_end
 
         if self._memtable.byte_size >= self._memtable_size_bytes:
@@ -1422,7 +1461,10 @@ class LSMTreeIndex(BaseIndex):
         _pwrite_all_fd(self._wal_fd, record, self._wal_offset)
         self._wal_offset += len(record)
         if self._fsync_on_write:
-            os.fsync(self._wal_fd)
+            try:
+                os.fsync(self._wal_fd)
+            except OSError as exc:
+                raise StorageError(f"Failed syncing LSM WAL {self._wal_path}: {exc}") from exc
 
     def _record_query_block_read(self) -> None:
         """Track 8 KB SSTable block reads performed during lookups and range scans."""
@@ -1459,24 +1501,47 @@ class LSMTreeIndex(BaseIndex):
         """Freeze active ``MemTable``, flush to ``L0``, atomically commit manifest, and reset WAL."""
         if len(self._memtable) == 0:
             if self._wal_fd is not None and self._wal_offset > 0:
-                os.fsync(self._wal_fd)
+                try:
+                    os.fsync(self._wal_fd)
+                except OSError as exc:
+                    raise StorageError(
+                        f"Failed syncing LSM WAL {self._wal_path}: {exc}"
+                    ) from exc
             return
 
+        prev_next_seq = self._next_seq
         sst_path = self._next_sst_path(0)
-        new_sst = SSTable.build(
-            sst_path,
-            self._memtable.iter_sorted(),
-            key_size=self._key_size,
-            entry_key_size=self._entry_key_size,
-        )
-        self._levels.setdefault(0, []).append(new_sst)
-        self._persist_manifest()
+        new_sst: SSTable | None = None
+        try:
+            new_sst = SSTable.build(
+                sst_path,
+                self._memtable.iter_sorted(),
+                key_size=self._key_size,
+                entry_key_size=self._entry_key_size,
+            )
+            candidate_levels: dict[int, list[SSTable]] = {
+                lvl: list(ssts) for lvl, ssts in self._levels.items()
+            }
+            candidate_levels.setdefault(0, []).append(new_sst)
+            self._persist_manifest(candidate_levels)
+        except Exception:
+            if new_sst is not None:
+                try:
+                    new_sst.close()
+                finally:
+                    new_sst.file_path.unlink(missing_ok=True)
+            self._next_seq = prev_next_seq
+            raise
+        self._levels = candidate_levels
 
         # Truncate WAL only after manifest.json points durably to the synced L0 SSTable.
         assert self._wal_fd is not None
-        os.ftruncate(self._wal_fd, 0)
-        os.lseek(self._wal_fd, 0, os.SEEK_SET)
-        os.fsync(self._wal_fd)
+        try:
+            os.ftruncate(self._wal_fd, 0)
+            os.lseek(self._wal_fd, 0, os.SEEK_SET)
+            os.fsync(self._wal_fd)
+        except OSError as exc:
+            raise StorageError(f"Failed resetting LSM WAL {self._wal_path}: {exc}") from exc
         self._wal_offset = 0
 
         self._memtable.clear()
@@ -1523,31 +1588,46 @@ class LSMTreeIndex(BaseIndex):
                     continue
                 yield ekey, is_tomb, rid
 
+        prev_next_seq = self._next_seq
         sst_path = self._next_sst_path(target_level)
-        new_sst = SSTable.build(
-            sst_path,
-            _dedup_stream(),
-            key_size=self._key_size,
-            entry_key_size=self._entry_key_size,
-        )
+        new_sst: SSTable | None = None
+        new_sst_closed = False
+        created_path_to_cleanup: Path | None = None
+        try:
+            new_sst = SSTable.build(
+                sst_path,
+                _dedup_stream(),
+                key_size=self._key_size,
+                entry_key_size=self._entry_key_size,
+            )
 
-        # Remove merged sources from self._levels; keep new SSTable only if non-empty.
-        remove_ids = {id(s) for _, s in old_ssts_to_remove}
-        updated_levels: dict[int, list[SSTable]] = {}
-        for lvl, ssts in self._levels.items():
-            kept = [s for s in ssts if id(s) not in remove_ids]
-            if kept:
-                updated_levels[lvl] = kept
+            # Build candidate level map without mutating self._levels until manifest commits.
+            remove_ids = {id(s) for _, s in old_ssts_to_remove}
+            updated_levels: dict[int, list[SSTable]] = {}
+            for lvl, ssts in self._levels.items():
+                kept = [s for s in ssts if id(s) not in remove_ids]
+                if kept:
+                    updated_levels[lvl] = kept
 
-        if new_sst.entry_count > 0:
-            updated_levels.setdefault(target_level, []).append(new_sst)
-            created_path_to_cleanup: Path | None = None
-        else:
-            new_sst.close()
-            created_path_to_cleanup = new_sst.file_path
+            if new_sst.entry_count > 0:
+                updated_levels.setdefault(target_level, []).append(new_sst)
+            else:
+                new_sst.close()
+                new_sst_closed = True
+                created_path_to_cleanup = new_sst.file_path
+
+            self._persist_manifest(updated_levels)
+        except Exception:
+            if new_sst is not None:
+                try:
+                    if not new_sst_closed:
+                        new_sst.close()
+                finally:
+                    new_sst.file_path.unlink(missing_ok=True)
+            self._next_seq = prev_next_seq
+            raise
 
         self._levels = updated_levels
-        self._persist_manifest()
 
         for _, old_sst in old_ssts_to_remove:
             old_sst.close()

@@ -191,7 +191,7 @@ class WorkloadAdvisor:
         self,
         table_name: str,
         column_name: str,
-        table_pages: int = 100,
+        table_pages: int | None = None,
         page_count: int | None = None,
     ) -> Recommendation:
         """Evaluate Rules 1–3 on a column's sliding window and log a recommendation.
@@ -199,7 +199,8 @@ class WorkloadAdvisor:
         Args:
             table_name: Target table name.
             column_name: Target column name.
-            table_pages: Current page count of ``table_name`` (primary parameter).
+            table_pages: Current page count of ``table_name`` (defaults to ``100``
+                when both ``table_pages`` and ``page_count`` are omitted).
             page_count: Optional alias for ``table_pages`` when callers use the
                 spec-prose keyword name.
 
@@ -209,22 +210,25 @@ class WorkloadAdvisor:
             rationale string, and Unix timestamp.
 
         Raises:
-            ValueError: If both ``table_pages`` (non-default) and ``page_count`` are
-                supplied with conflicting values, or if the resolved page count is
-                negative.
+            ValueError: If both ``table_pages`` and ``page_count`` are supplied
+                with conflicting values, or if the resolved page count is negative.
 
         Complexity & Concurrency:
             $O(\\text{window\\_size})$ under ``self._lock``.
         """
-        if page_count is not None:
-            if table_pages != 100 and table_pages != page_count:
+        if table_pages is not None and page_count is not None:
+            if table_pages != page_count:
                 raise ValueError(
                     f"Conflicting page arguments: table_pages={table_pages}, "
                     f"page_count={page_count}"
                 )
-            pages = page_count
-        else:
             pages = table_pages
+        elif page_count is not None:
+            pages = page_count
+        elif table_pages is not None:
+            pages = table_pages
+        else:
+            pages = 100
 
         if pages < 0:
             raise ValueError(f"page_count must be >= 0, got {pages}")

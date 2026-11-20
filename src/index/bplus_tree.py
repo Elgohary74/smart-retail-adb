@@ -1010,11 +1010,11 @@ class BPlusTreeIndex(BaseIndex):
         """
         low_bytes = encode_key(low_key, self._key_dtype, self._key_size)
         high_bytes = encode_key(high_key, self._key_dtype, self._key_size)
-        if low_bytes > high_bytes or (not inclusive and low_bytes == high_bytes):
-            return []
 
         with self._lock:
             self._ensure_open()
+            if low_bytes > high_bytes or (not inclusive and low_bytes == high_bytes):
+                return []
             if self._root_page_id == INVALID_PAGE_ID:
                 return []
 

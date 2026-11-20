@@ -330,9 +330,15 @@ class DiskManager:
         with self._lock:
             self._ensure_open()
             self._validate_page_id(page_id, allow_zero=False)
+            was_allocated = self._get_bit(page_id)
             self._clear_bit(page_id)
-            self._pwrite_exact(page_id * PAGE_SIZE, _ZERO_PAGE)
-            self._persist_fsm()
+            try:
+                self._pwrite_exact(page_id * PAGE_SIZE, _ZERO_PAGE)
+                self._persist_fsm()
+            except Exception:
+                if was_allocated:
+                    self._set_bit(page_id)
+                raise
 
     def read_page(self, page_id: int) -> bytearray:
         """Read and checksum-verify an 8,192-byte page from disk.

@@ -461,7 +461,7 @@ class SimpleExecutor:
    * Physical capacity per 8,192-byte page is `(8192 - 32) // 1536 = 5` vectors (`slot_count <= 5`).
    * Append `vec.astype(np.float32).tobytes()` (`1,536` bytes per vector) via `cp.append_value(...)` / `cp.append_batch(...)`, and read zero-copy batches while pinned:
      ```python
-     mat = cp.as_numpy_array(np.float32).reshape(-1, 384)  # shape (N, 384), OWNDATA=False
+     mat = cp.as_numpy_array(np.float32)  # shape (N, 384), OWNDATA=False
      scores = (mat @ query_vec) / (np.linalg.norm(mat, axis=1) * np.linalg.norm(query_vec))
      ```
 2. **Deterministic Sharding & Immutable `RID`s:**
@@ -486,7 +486,7 @@ Future waves **must** preserve every invariant below:
   * `new_page()` must secure/flush a buffer frame *before* allocating an FSM bit on disk.
 - [ ] **Strict Lock Acquisition Order (Deadlock Prevention):**
   ```text
-  StorageEngineLock -> CatalogLock -> IndexLock -> TableHeapLock -> BufferPoolLock -> DiskManagerLock
+  CatalogLock -> IndexLock -> StorageEngineLock -> TableHeapLock -> BufferPoolLock -> DiskManagerLock
   StorageEngineLock -> ObjectStoreLock
   WorkloadAdvisorLock (leaf lock; never calls outward while held)
   ```
