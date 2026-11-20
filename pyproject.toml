@@ -3,17 +3,25 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "smart-retail-db"
+name = "csai302-db"
 version = "0.1.0"
-description = "A custom educational DBMS implementing storage and indexing milestones"
-requires-python = ">=3.10"
-dependencies = []
+description = "Custom disk-oriented relational and object DBMS for CSAI 302 (Milestones 1 & 2)"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "cryptography>=42.0",
+]
 
-[project.scripts]
-smartdb = "smartdb.cli:main"
-
-[tool.setuptools]
-package-dir = {"" = "src"}
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "matplotlib>=3.8",
+]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

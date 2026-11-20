@@ -1,101 +1,92 @@
-# Smart Retail DB — Milestones 1 and 2
+# `csai302_db` — Custom Disk-Oriented Relational & Object DBMS
 
-A small educational DBMS implemented in Python using the course's retail-orders example. The core data path is custom page storage and custom indexes; it does **not** use SQLite, PostgreSQL, MySQL, or another database engine.
+A custom, disk-oriented relational and object Database Management System built from first principles in Python 3.12+ for the **CSAI 302** course (**Milestones 1 & 2**), modeled around the **Retail Orders & Product Search** domain (`customers`, `products`, `inventory`, `orders`, `order_items`, and encrypted product images).
 
-## What's implemented
+All persistence, buffer management, indexing, and query execution are implemented directly in custom binary formats (`*.db`, `*.col`, `*.bpt`, `*.sst`, `*.wal`, `objects.dat`, `objects.dir`) without SQLite, external DB engines, `pickle`, or OS-file-per-record shortcuts.
 
-### M1 — Storage engine foundation
-- Persistent fixed-size 4,096-byte pages.
-- Configurable FIFO or LRU buffer pool with dirty-page write-back and counters for hits, misses, reads, writes, evictions, and hit rate.
-- Row-oriented and column-oriented encodings for records in pages.
-- Repeatable benchmark comparing FIFO and LRU with the same deterministic trace.
+---
 
-### M2 — Advanced indexing
-- B+ Tree index with leaf links, duplicate-key buckets, point lookup, and range lookup.
-- LSM Tree index with an in-memory memtable, sorted JSONL runs on disk, point/range lookup, and compaction.
-- `auto` index selection: write-heavy workloads choose LSM; otherwise choose B+ Tree. This is a documented heuristic, not a learned optimizer.
-- A local object-store backend (one page per object file) behind the same page interface.
-- Optional encryption/decryption transform hooks. They are **hooks only**; the default does not encrypt. Supply paired, same-length transforms from an approved cryptographic implementation if encryption is required.
-- Restricted SQL-like `SELECT * FROM table [WHERE field = literal]` with indexed equality lookup when an index exists. The grammar rejects expressions such as `OR 1=1`; it is intentionally not a full SQL parser.
+## 1. Architecture Overview
 
-## Quick start (Windows PowerShell)
+* **Milestone 1 (Storage Engine & Buffer Pool):**
+  * Universal `8,192`-byte checksummed pages (`32`-byte `<IBBHQIIQ` header + 64-bit BLAKE2b integrity digest) with Page 0 Free Space Map (FSM) bitmaps and `os.pread`/`os.pwrite` + `os.fsync` persistence.
+  * Dual storage layouts sharing a unified `RID(page_id, slot_id)` abstraction:
+    * `SlottedPage` (row-oriented) with `16`-byte MVCC headers (`xmin`, `xmax`) and `RID`-preserving `compact()`.
+    * `ColumnPage` (column-oriented, `1,020` rows per 8-byte chunk) exposing zero-copy `numpy.ndarray` views.
+  * Thread-safe, pin-aware `BufferPoolManager` supporting pluggable `LRUReplacer` and `FIFOReplacer` policies, dirty write-back, and hit/miss telemetry.
+* **Milestone 2 (Object Store, Indexing & Query Shell):**
+  * Extent-based binary `ObjectStore` (`objects.dat` + `objects.dir`) with `NoOpCipher` and `AES256GCMHook` (`aad = struct.pack("<Q", oid)`).
+  * Buffer-pool-backed `BPlusTreeIndex` (`*.bpt`, `fsm_offset=64`) with order-preserving key codecs, duplicate-key composite encoding, leaf sibling range scans, and latch-crabbing pin discipline (`<= 2` pinned frames).
+  * Three-tier `LSMTreeIndex` with CRC32-protected `lsm.wal`, `1 MB` `MemTable`, immutable `SSTable`s with SHA-256 Bloom filters and sparse fence indexes, and size-tiered compaction.
+  * Sliding-window $(\alpha, \beta)$ `WorkloadAdvisor` and parameterized, injection-safe `SimpleExecutor` backed by an atomic `CatalogManager`.
 
-```powershell
-cd smart-retail-db
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e .
-python -m unittest discover -s tests -v
+---
+
+## 2. Environment & Installation
+
+Requires **Python 3.12+**.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install numpy cryptography pytest matplotlib
 ```
 
-No third-party runtime dependencies are needed. The test suite uses Python's standard `unittest` framework.
+Quick dependency verification:
 
-## Run the CLI
-
-```powershell
-smartdb --db .\retail_data
+```bash
+.venv/bin/python -c "import numpy, cryptography, pytest, matplotlib; print('OK')"
 ```
 
-Try these commands in the prompt:
+---
 
-```sql
-CREATE TABLE Products (product_id, name, category, price, stock) LAYOUT ROW;
-INSERT INTO Products VALUES (1, 'Keyboard', 'Accessories', 29.99, 20);
-INSERT INTO Products VALUES (2, 'Mouse', 'Accessories', 15.50, 35);
-SELECT * FROM Products;
-SELECT * FROM Products WHERE product_id = 1;
-CREATE INDEX ON Products (product_id) USING AUTO READS 100 WRITES 10;
-SELECT * FROM Products WHERE product_id = 1;
+## 3. Repository Map
+
+| Path | Role |
+| :--- | :--- |
+| [`src/`](src/) | Core DBMS package (`common/`, `storage/`, `index/`, `query/`) |
+| [`tests/`](tests/) | Gate 1 ([`test_m1_storage.py`](tests/test_m1_storage.py)) and Gate 2 ([`test_m2_indexing.py`](tests/test_m2_indexing.py)) adversarial suites |
+| [`bench/`](bench/) | Deterministic Retail data loader (`retail_loader.py`) and benchmark suite (`run_m1_m2_benchmarks.py`) |
+| [`docs/`](docs/) | Architecture spec ([`architecture.md`](docs/architecture.md)), [`ai_specs/`](docs/ai_specs/), [`DEV_JOURNAL.md`](docs/DEV_JOURNAL.md), ADRs, and M3–M6 handoff docs |
+| `results/` | Generated Gate 3 CSV metrics, environment metadata, and 300-DPI PNG plots |
+| `data/` | Runtime database files (gitignored) |
+
+---
+
+## 4. Reproducible Execution Commands
+
+### Gate 1 — M1 Storage Engine & Buffer Pool
+```bash
+.venv/bin/pytest -v tests/test_m1_storage.py
 ```
 
-Then use `:explain SELECT * FROM Products WHERE product_id = 1` to see whether the engine picks a table scan or index lookup. `:stats` prints buffer-pool statistics.
-
-Use `--backend objects` to store pages as separate local object files:
-
-```powershell
-smartdb --db .\retail_objects --backend objects
+### Gate 2 — M2 Indexing, Object Store & Query Shell (Full M1 + M2 Suite)
+```bash
+.venv/bin/pytest -v tests/test_m1_storage.py tests/test_m2_indexing.py
 ```
 
-The backend is a local adapter to demonstrate the object-storage abstraction; it is not an S3 client.
-
-## Generate a demo dataset
-
-```powershell
-python .\workloads\generate_retail_data.py --db .\retail_data --products 10000 --customers 1000 --orders 5000 --seed 42
+### Generate Retail Dataset (`seed=42`)
+```bash
+.venv/bin/python -m bench.retail_loader --scale standard --seed 42
 ```
 
-To use object-backed pages, add `--backend objects`. The data is synthetic and generated with a fixed seed. The generator appends to existing tables when their schemas match; it does not delete existing database contents. Use a separate `--db` directory for a fresh dataset. Adjust sizes to your computer. The generator is intended for a first benchmark/demo, not a replacement for the TPC-H subset required in M3.
-
-## Benchmarks
-
-Run each benchmark multiple times and report the median; a single run is not sufficient for a final report.
-The index benchmark runs three repetitions by default, checks lookup correctness, and writes per-run and median write/point-lookup results. Override the count with `--repeats`.
-
-```powershell
-python .\benchmarks\benchmark_storage.py --pages 128 --accesses 10000 --capacity 16 --seed 42
-python .\benchmarks\benchmark_indexes.py --records 10000 --seed 42
+### Gate 3 — Full M1 + M2 Benchmarks & Plots
+```bash
+.venv/bin/python -m bench.run_m1_m2_benchmarks --runs 5 --seed 42 --out-dir results/m1_m2
 ```
 
-CSV results are written to `benchmark_results/`. Keep your Python version, OS, CPU/RAM, seed, page count, buffer capacity, and command line with your final measurements. Timings vary by machine; do not copy example numbers from another system.
+---
 
-## Project structure
+## 5. Rubric Traceability Summary (30 Marks)
 
-```text
-src/smartdb/
-  engine.py                 high-level database API
-  cli.py                    interactive command line
-  query.py                  restricted safe SELECT parser
-  storage/page_file.py      persistent fixed-size pages
-  storage/buffer_pool.py    FIFO/LRU cache and metrics
-  storage/layouts.py        row/column page encoding
-  storage/table.py          page-backed records and locators
-  storage/object_store.py   local object-store adapter
-  storage/encryption.py     optional same-length transform hooks
-  indexes/bplus_tree.py     B+ Tree
-  indexes/lsm_tree.py       LSM memtable, disk runs, compaction
-  indexes/manager.py        auto index choice and common interface
-tests/                      storage, index, and integration tests
-benchmarks/                 M1 and M2 benchmark scripts
-workloads/                  reproducible synthetic data generator
-```
-
+| Milestone | Rubric Criterion | Marks | Target Modules | Gate Verification |
+| :--- | :--- | :---: | :--- | :--- |
+| **M1** | Custom persistent storage | 5 | `src/storage/disk_manager.py`, `page_header.py`, `storage_engine.py` | `test_m1_persistence_across_restart`, `test_m1_torn_page_checksum_detection`, `test_m1_fsm_allocation_reuse` |
+| **M1** | Buffer pool | 3 | `src/storage/buffer_pool.py`, `replacer.py` | `test_m1_lru_eviction_order`, `test_m1_fifo_eviction_order`, `test_m1_pin_protection_and_pool_full` |
+| **M1** | Storage layouts | 3 | `src/storage/slotted_page.py`, `column_page.py`, `table_heap.py` | `test_m1_slotted_page_crud_and_compaction`, `test_m1_column_page_zero_copy_numpy` |
+| **M1** | Testing and measurements | 4 | `tests/test_m1_storage.py`, `bench/run_m1_m2_benchmarks.py` | `test_m1_dirty_writeback_accuracy`, `test_m1_hit_miss_telemetry` + Gate 3 M1 benchmarks |
+| **M2** | B+ Tree | 5 | `src/index/bplus_tree.py` | `test_m2_bplus_50k_inserts_and_invariants`, `test_m2_bplus_sibling_range_scan`, `test_m2_bplus_restart_persistence` |
+| **M2** | LSM Tree | 4 | `src/index/lsm_tree.py` | `test_m2_lsm_wal_crash_recovery`, `test_m2_lsm_tombstone_compaction`, `test_m2_lsm_bloom_filter_effectiveness` |
+| **M2** | Workload-based choice | 2 | `src/index/index_advisor.py` | `test_m2_workload_advisor_decision_rules` |
+| **M2** | Object storage & encryption | 1 | `src/storage/object_store.py`, `cipher_hooks.py` | `test_m2_object_store_aes256_gcm_and_tamper_detection` |
+| **M2** | Correctness & performance | 3 | `src/query/catalog.py`, `simple_executor.py`, `bench/` | `test_m2_sql_executor_and_injection_defense`, `test_m2_index_vs_fullscan_equivalence` + Gate 3 M2 benchmarks |

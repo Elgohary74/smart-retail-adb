@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 retail_data/
 benchmark_results/
+data/
+.superpowers/
 *.tmp
 
 # Byte-compiled / optimized / DLL files
