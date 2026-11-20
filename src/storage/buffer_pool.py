@@ -216,6 +216,8 @@ class BufferPoolManager:
         """Restore a frame after a failed disk read or page allocation."""
         frame = self._frames[frame_id]
         if from_free_list or frame.page_id is None:
+            frame.pin_count = 0
+            frame.is_dirty = False
             self._free_list.appendleft(frame_id)
         else:
             # The previous page's buffer and page_table entry are still intact.
@@ -400,8 +402,7 @@ class BufferPoolManager:
                 if self._disk_manager.is_allocated(page_id):
                     self._disk_manager.deallocate_page(page_id)
                 self._page_table.pop(page_id, None)
-                remove_fn = getattr(self._replacer, "remove", self._replacer.pin)
-                remove_fn(frame_id)
+                self._replacer.remove(frame_id)
                 frame.reset()
                 self._free_list.append(frame_id)
                 return True

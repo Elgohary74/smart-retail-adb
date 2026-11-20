@@ -76,6 +76,18 @@ class ReplacementPolicy(ABC):
             Count of unpinned frames tracked by this policy.
         """
 
+    def remove(self, frame_id: int) -> None:
+        """Remove ``frame_id`` permanently when its page is deleted from the pool.
+
+        Defaults to ``pin(frame_id)`` so subclasses that retain arrival state
+        across temporary ``pin()``/``unpin()`` cycles (such as ``FIFOReplacer``)
+        can override it to clear stale history without breaking custom policies.
+
+        Args:
+            frame_id: Frame index returned to the buffer pool free list.
+        """
+        self.pin(frame_id)
+
 
 class LRUReplacer(ReplacementPolicy):
     """Least-Recently-Used frame replacement policy backed by ``OrderedDict``."""
@@ -149,21 +161,6 @@ class LRUReplacer(ReplacementPolicy):
             self._od.move_to_end(frame_id, last=True)
         else:
             self._od[frame_id] = None
-
-    def remove(self, frame_id: int) -> None:
-        """Forget ``frame_id`` completely when its page is deleted from the pool.
-
-        Args:
-            frame_id: Frame index in ``[0, num_frames)`` returned to the free list.
-
-        Raises:
-            TypeError: If ``frame_id`` is not an integer.
-            ValueError: If ``frame_id`` lies outside ``[0, num_frames)``.
-
-        Complexity:
-            $O(1)$ time and space; caller must hold ``BufferPoolLock``.
-        """
-        self.pin(frame_id)
 
     def size(self) -> int:
         """Return the count of unpinned frames currently eligible for eviction.
