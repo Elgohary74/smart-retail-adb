@@ -2,26 +2,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
 
-PAGE_SIZE = 4096
-
-
-class PageBackend(Protocol):
-    """Interface shared by normal page files and object-backed pages."""
-
-    def read_page(self, page_id: int) -> bytes: ...
-    def write_page(self, page_id: int, data: bytes) -> None: ...
-    def allocate_page(self) -> int: ...
-    @property
-    def page_count(self) -> int: ...
-    def close(self) -> None: ...
+from ...core.config import PAGE_SIZE
 
 
 class PageFile:
     """A contiguous file of fixed-size pages. Page IDs start at zero."""
 
-    def __init__(self, path: str | Path, page_size: int = PAGE_SIZE):
+    def __init__(self, path: str | Path, page_size: int = PAGE_SIZE) -> None:
         if page_size <= 0:
             raise ValueError("page_size must be positive")
         self.path = Path(path)
@@ -32,6 +20,14 @@ class PageFile:
         if self._file.tell() % self.page_size:
             self._file.close()
             raise ValueError(f"File size is not a multiple of page size: {self.path}")
+
+    @property
+    def physical_page_size(self) -> int:
+        return self.page_size
+
+    @property
+    def usable_page_size(self) -> int:
+        return self.page_size
 
     @property
     def page_count(self) -> int:
@@ -74,8 +70,12 @@ class PageFile:
             self._file.flush()
             self._file.close()
 
+    def destroy(self) -> None:
+        self.close()
+        self.path.unlink(missing_ok=True)
+
     def __enter__(self) -> "PageFile":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self.close()

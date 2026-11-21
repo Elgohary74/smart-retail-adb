@@ -1,135 +1,147 @@
-"""Compare B+ Tree and LSM index write and point-lookup performance."""
+"""M2 Indexing Benchmark: Indexed vs Full Scan, Read-Heavy vs Write-Heavy, Range & Index Size."""
 from __future__ import annotations
 
 import argparse
-import csv
 import random
-import statistics
 import tempfile
-import time
 from pathlib import Path
 from typing import Any
 
-from smartdb.indexes.bplus_tree import BPlusTree
-from smartdb.indexes.lsm_tree import LSMTree
+from common import environment_metadata, run_repeated, save_bar_chart, write_csv
+from smartdb.core import DEFAULT_BENCH_OUT_DIR, ColumnSpec, DataType, load_settings
+from smartdb.engine import SmartRetailDB
+
+SCHEMA = [
+    ColumnSpec("product_id", DataType.INT, nullable=False),
+    ColumnSpec("name", DataType.STR, nullable=False),
+    ColumnSpec("price", DataType.FLOAT, nullable=False),
+]
 
 
-def _positive_int(value: str) -> int:
-    parsed = int(value)
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("must be at least 1")
-    return parsed
-
-
-def _measure(index_type: str, keys: list[int], query_keys: list[int],
-             repeat: int, seed: int) -> list[dict[str, Any]]:
-    expected = {key: (key, 0) for key in keys}
-    with tempfile.TemporaryDirectory() as temp_dir:
-        if index_type == "BPLUS":
-            index = BPlusTree()
-        else:
-            index = LSMTree(Path(temp_dir) / "lsm")
-
-        start = time.perf_counter()
-        for key in keys:
-            index.insert(key, expected[key])
-        if index_type == "LSM":
-            index.close()
-        write_seconds = time.perf_counter() - start
-
-        start = time.perf_counter()
-        results = [index.search(key) for key in query_keys]
-        read_seconds = time.perf_counter() - start
-
-        for key, result in zip(query_keys, results):
-            if result != [expected[key]]:
-                raise AssertionError(
-                    f"{index_type} returned an incorrect result for key {key}: {result}"
-                )
-
-    return [
-        {
-            "index": index_type,
-            "operation": "write",
-            "records": len(keys),
-            "queries": len(query_keys),
-            "seed": seed,
-            "repeat": repeat,
-            "elapsed_seconds": write_seconds,
-            "operations_per_second": len(keys) / write_seconds,
-        },
-        {
-            "index": index_type,
-            "operation": "point_lookup",
-            "records": len(keys),
-            "queries": len(query_keys),
-            "seed": seed,
-            "repeat": repeat,
-            "elapsed_seconds": read_seconds,
-            "operations_per_second": len(query_keys) / read_seconds,
-        },
-    ]
-
-
-def run(records: int, seed: int, repeats: int) -> list[dict[str, Any]]:
+def _setup_db(tmp: str, records: int, index_type: str | None, seed: int) -> tuple[SmartRetailDB, list[int]]:
     rng = random.Random(seed)
     keys = list(range(records))
     rng.shuffle(keys)
-    query_keys = keys.copy()
-    rng.shuffle(query_keys)
+    db = SmartRetailDB(tmp, buffer_frames=32)
+    db.create_table("Products", SCHEMA, layout="row")
+    if index_type is not None:
+        db.create_index("Products", "product_id", index_type)
+    for k in keys:
+        db.insert("Products", {"product_id": k, "name": f"Item-{k}", "price": float(k % 500)})
+    db.pool.flush_all()
+    return db, keys
 
-    measurements = []
-    for repeat in range(1, repeats + 1):
-        for index_type in ("BPLUS", "LSM"):
-            measurements.extend(
-                _measure(index_type, keys, query_keys, repeat, seed)
-            )
 
-    summary = []
-    for index_type in ("BPLUS", "LSM"):
-        for operation in ("write", "point_lookup"):
-            samples = [
-                row["elapsed_seconds"]
-                for row in measurements
-                if row["index"] == index_type and row["operation"] == operation
-            ]
-            summary.append(
-                {
-                    "index": index_type,
-                    "operation": operation,
-                    "records": records,
-                    "queries": records,
-                    "seed": seed,
-                    "repeat": "median",
-                    "elapsed_seconds": statistics.median(samples),
-                    "operations_per_second": records / statistics.median(samples),
-                }
-            )
-    return measurements + summary
+def bench_scan_vs_index(records: int, queries: int, seed: int, repeats: int) -> list[dict[str, Any]]:
+    rng = random.Random(seed)
+    qkeys = [rng.randrange(records) for _ in range(queries)]
+    rows: list[dict[str, Any]] = []
+    for variant, idx_type in (("full_scan", None), ("bplus_index", "BPLUS"), ("lsm_index", "LSM")):
+        with tempfile.TemporaryDirectory() as tmp:
+            db, _ = _setup_db(tmp, records, idx_type, seed)
+            idx_bytes = db.index_manager.disk_bytes("Products", "product_id") if idx_type else 0
+
+            def _lookup() -> dict[str, Any]:
+                for k in qkeys:
+                    res = db.execute(f"SELECT product_id, name FROM Products WHERE product_id = {k}")
+                    assert len(res) == 1 and res[0]["product_id"] == k
+                return {"index_bytes": idx_bytes}
+
+            _, summary = run_repeated(_lookup, repeats=repeats)
+            db.close()
+            rows.append({
+                "suite": "point_lookup_vs_scan",
+                "variant": variant,
+                "ops": queries,
+                "ops_per_sec": round(queries / (summary["median_ms"] / 1000.0), 1),
+                "index_bytes": idx_bytes,
+                **summary,
+            })
+    return rows
+
+
+def bench_workloads(records: int, ops: int, seed: int, repeats: int) -> list[dict[str, Any]]:
+    rng = random.Random(seed)
+    rows: list[dict[str, Any]] = []
+    # 1. Write-heavy (80W/20R) vs Read-heavy (90R/10W)
+    for workload, write_prob in (("write_heavy_80W_20R", 0.8), ("read_heavy_90R_10W", 0.1)):
+        for idx_type in ("BPLUS", "LSM"):
+            def _run_mixed() -> dict[str, Any]:
+                with tempfile.TemporaryDirectory() as tmp:
+                    db, _ = _setup_db(tmp, records // 2, idx_type, seed)
+                    next_id = records // 2
+                    for _ in range(ops):
+                        if rng.random() < write_prob:
+                            db.insert("Products", {"product_id": next_id, "name": f"N-{next_id}", "price": 10.0})
+                            next_id += 1
+                        else:
+                            k = rng.randrange(next_id)
+                            res = db.execute(f"SELECT product_id FROM Products WHERE product_id = {k}")
+                            assert len(res) == 1
+                    idx_bytes = db.index_manager.disk_bytes("Products", "product_id")
+                    db.close()
+                    return {"index_bytes": idx_bytes}
+
+            runs, summary = run_repeated(_run_mixed, repeats=repeats)
+            rows.append({
+                "suite": workload,
+                "variant": idx_type,
+                "ops": ops,
+                "ops_per_sec": round(ops / (summary["median_ms"] / 1000.0), 1),
+                "index_bytes": runs[-1]["index_bytes"],
+                **summary,
+            })
+
+    # 2. Range scan comparison
+    for idx_type in ("BPLUS", "LSM"):
+        with tempfile.TemporaryDirectory() as tmp:
+            db, _ = _setup_db(tmp, records, idx_type, seed)
+            def _range() -> dict[str, Any]:
+                low_id = min(100, records // 4)
+                high_id = low_id + min(200, max(1, records // 2))
+                res = db.execute(f"SELECT product_id FROM Products WHERE product_id BETWEEN {low_id} AND {high_id}")
+                assert len(res) > 0
+                return {"rows_returned": len(res)}
+
+            _, summary = run_repeated(_range, repeats=repeats)
+            db.close()
+            rows.append({
+                "suite": "range_scan",
+                "variant": idx_type,
+                "ops": 1,
+                "ops_per_sec": round(1000.0 / summary["median_ms"], 1),
+                **summary,
+            })
+    return rows
 
 
 def main() -> None:
+    settings = load_settings()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--records", type=_positive_int, default=10_000)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--repeats", type=_positive_int, default=3)
-    parser.add_argument("--out", type=Path, default=Path("benchmark_results/m2_indexes.csv"))
+    parser.add_argument("--records", type=int, default=2000)
+    parser.add_argument("--queries", type=int, default=200)
+    parser.add_argument("--ops", type=int, default=400)
+    parser.add_argument("--seed", type=int, default=settings.seed)
+    parser.add_argument("--repeats", type=int, default=settings.bench_repeats)
+    parser.add_argument("--out", type=Path, default=Path(DEFAULT_BENCH_OUT_DIR) / "m2_indexes.csv")
+    parser.add_argument("--plots", action="store_true")
     args = parser.parse_args()
 
-    rows = run(args.records, args.seed, args.repeats)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    with args.out.open("w", newline="", encoding="utf-8") as output:
-        writer = csv.DictWriter(output, fieldnames=rows[0].keys())
-        writer.writeheader()
-        writer.writerows(rows)
-
+    print("Environment:", environment_metadata(), f"seed={args.seed} repeats={args.repeats}")
+    rows = bench_scan_vs_index(args.records, args.queries, args.seed, args.repeats)
+    rows.extend(bench_workloads(args.records, args.ops, args.seed, args.repeats))
+    write_csv(args.out, rows)
     for row in rows:
-        if row["repeat"] == "median":
-            print(
-                f"{row['index']} {row['operation']}: median "
-                f"{row['elapsed_seconds']:.6f}s, "
-                f"{row['operations_per_second']:.0f} ops/s"
-            )
+        print(row)
+    if args.plots:
+        pt = [r for r in rows if r["suite"] == "point_lookup_vs_scan"]
+        save_bar_chart(
+            args.out.parent / "plots/m2_scan_vs_index.png",
+            "M2: Full Scan vs Indexed Point Lookup",
+            [r["variant"] for r in pt],
+            [r["median_ms"] for r in pt],
+            "Median Latency (ms)",
+        )
     print(f"Saved results to {args.out}")
 
 
