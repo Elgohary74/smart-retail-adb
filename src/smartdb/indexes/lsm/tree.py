@@ -16,9 +16,10 @@ from ...core import (
     encode_key,
 )
 from ...storage import BufferPool, StorageManager
+from ..base import key_in_range
 from .bloom import BloomFilter
-from .wal import LSMWal
 from .sstable import OpList, SSTableRun, read_sstable_meta, read_sstable_page, write_sstable_run
+from .wal import LSMWal
 
 __all__ = ["BloomFilter", "LSMTree"]
 
@@ -31,6 +32,12 @@ def _resolve_ops(ops: OpList) -> list[RID]:
         elif rid is not None:
             live[rid] = not is_deleted
     return [rid for rid, ok in live.items() if ok]
+
+
+def _start_page_for_key(run: SSTableRun, key_bytes: bytes | None) -> int:
+    if key_bytes is None or not run.fence:
+        return 0
+    return run.fence[max(0, bisect_right(run.fence_keys, key_bytes) - 1)][1]
 
 
 class LSMTree:
@@ -74,13 +81,19 @@ class LSMTree:
         self._wal = LSMWal(self.wal_path, self.storage_manager)
         self.memtable, self.memtable_entries, max_seq = self._wal.replay()
         self._next_seq = max(self._next_seq, max_seq + 1)
-        self._wal_file = self._wal  # expose handle for crash-simulation tests
+
+    @property
+    def wal(self) -> LSMWal:
+        """Return the memtable write-ahead log handle."""
+        return self._wal
 
     @property
     def run_count(self) -> int:
+        """Number of immutable SSTable runs currently active."""
         return len(self.runs)
 
     def disk_bytes(self) -> int:
+        """Total physical bytes occupied by SSTable runs and the active WAL."""
         total = self.wal_path.stat().st_size if self.wal_path.exists() else 0
         for run in self.runs:
             backend = self.storage_manager.get_backend(run.file_id)
@@ -123,9 +136,11 @@ class LSMTree:
             self.flush()
 
     def insert(self, key: Any, rid: RID) -> None:
+        """Append a (key, RID) insert into the memtable and WAL."""
         self._record_op(key, rid, False)
 
     def delete(self, key: Any, rid: RID | None = None) -> None:
+        """Append a RID-level or key-level tombstone into the memtable and WAL."""
         self._record_op(key, rid, True)
 
     def _create_run(self, sorted_items: list[tuple[bytes, OpList]]) -> SSTableRun:
@@ -143,6 +158,7 @@ class LSMTree:
         self._wal.truncate()
 
     def flush(self) -> None:
+        """Flush the active memtable to a new sorted SSTable run and truncate WAL."""
         if not self.memtable:
             return
         run = self._create_run(sorted(self.memtable.items(), key=lambda item: item[0]))
@@ -152,9 +168,7 @@ class LSMTree:
         if len(self.runs) >= self.compaction_threshold:
             self.compact()
 
-    def compact(self) -> None:
-        if len(self.runs) < 2 and not self.memtable:
-            return
+    def _merge_all_ops(self) -> list[tuple[bytes, OpList]]:
         merged: dict[bytes, OpList] = {}
         for run in self.runs:
             for pid in range(run.data_pages):
@@ -162,7 +176,6 @@ class LSMTree:
                     merged.setdefault(kb, []).extend(ops)
         for kb, ops in self.memtable.items():
             merged.setdefault(kb, []).extend(ops)
-
         final_items: list[tuple[bytes, OpList]] = []
         seq = self._next_seq
         for kb in sorted(merged):
@@ -170,7 +183,13 @@ class LSMTree:
                 final_items.append((kb, [(r, seq, False) for r in live]))
         if final_items:
             self._next_seq += 1
+        return final_items
 
+    def compact(self) -> None:
+        """Merge all SSTable runs and memtable entries into a single compacted run."""
+        if len(self.runs) < 2 and not self.memtable:
+            return
+        final_items = self._merge_all_ops()
         old_runs = list(self.runs)
         self.runs = [self._create_run(final_items)] if final_items else []
         self._clear_memtable_and_commit()
@@ -180,13 +199,13 @@ class LSMTree:
         self.compactions += 1
 
     def search(self, key: Any) -> list[RID]:
+        """Return all live RIDs indexed under key across memtable and SSTable runs."""
         kb = encode_key(self.key_dtype, key)
         ops: OpList = list(self.memtable.get(kb, []))
         for run in reversed(self.runs):
             if kb < run.min_key or kb > run.max_key or not run.bloom.might_contain(kb):
                 continue
-            idx = max(0, bisect_right([fk for fk, _ in run.fence], kb) - 1)
-            for pid in range(run.fence[idx][1], run.data_pages):
+            for pid in range(_start_page_for_key(run, kb), run.data_pages):
                 entries = read_sstable_page(self.pool, run.file_id, pid)
                 pos = bisect_left([e[0] for e in entries], kb)
                 while pos < len(entries) and entries[pos][0] == kb:
@@ -202,27 +221,23 @@ class LSMTree:
     ) -> None:
         if (low_b is not None and run.max_key < low_b) or (high_b is not None and run.min_key > high_b):
             return
-        start_pid = 0
-        if low_b is not None and run.fence:
-            start_pid = run.fence[max(0, bisect_right([fk for fk, _ in run.fence], low_b) - 1)][1]
-        for pid in range(start_pid, run.data_pages):
+        for pid in range(_start_page_for_key(run, low_b), run.data_pages):
             for kb, ops in read_sstable_page(self.pool, run.file_id, pid):
                 if high_b is not None and (kb > high_b or (not include_high and kb == high_b)):
                     return
-                if low_b is None or (kb > low_b or (include_low and kb == low_b)):
+                if key_in_range(kb, low_b, high_b, include_low, include_high):
                     collected.setdefault(kb, []).extend(ops)
 
     def range_search(
         self, low: Any | None = None, high: Any | None = None,
         include_low: bool = True, include_high: bool = True,
     ) -> list[tuple[Any, RID]]:
+        """Return ordered (key, RID) pairs within optional lower/upper bounds."""
         low_b = encode_key(self.key_dtype, low) if low is not None else None
         high_b = encode_key(self.key_dtype, high) if high is not None else None
         collected: dict[bytes, OpList] = {}
         for kb, ops in self.memtable.items():
-            ok_low = low_b is None or (kb > low_b or (include_low and kb == low_b))
-            ok_high = high_b is None or (kb < high_b or (include_high and kb == high_b))
-            if ok_low and ok_high:
+            if key_in_range(kb, low_b, high_b, include_low, include_high):
                 collected.setdefault(kb, []).extend(ops)
         for run in self.runs:
             self._collect_run_range(run, low_b, high_b, include_low, include_high, collected)
@@ -233,6 +248,7 @@ class LSMTree:
         ]
 
     def close(self) -> None:
+        """Flush pending memtable entries to disk and close owned handles."""
         if not self._wal.closed:
             self.flush()
             self._wal.close()
@@ -241,9 +257,19 @@ class LSMTree:
             self.storage_manager.close_all()
 
     def destroy(self) -> None:
-        """Close WAL, unregister all SSTable runs from pool, and delete run files."""
-        self._wal.close()
+        """Remove WAL, manifest, memtable state, and all SSTable run files."""
+        self._wal.destroy()
+        self.memtable.clear()
+        self.memtable_entries = 0
         for run in self.runs:
             self.pool.unregister_file(run.file_id, drop_dirty=True)
             self.storage_manager.drop_file(run.logical_name)
         self.runs.clear()
+        self.manifest_path.unlink(missing_ok=True)
+        self.manifest_path.with_suffix(".tmp").unlink(missing_ok=True)
+
+    def __enter__(self) -> "LSMTree":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()

@@ -172,6 +172,7 @@ src/smartdb/
       column_codec.py       # Columnar bitmap and fixed/variable page codecs
       column.py             # Per-column ColumnTable (projection pushdown, vectorized batches)
   indexes/
+    base.py                 # Shared IndexProtocol and key_in_range boundary helper
     manager.py              # IndexManager & choose_index_type heuristic
     bplus/
       pages.py              # Binary B+ Tree meta/internal/leaf page codecs
@@ -182,7 +183,7 @@ src/smartdb/
       sstable.py            # Immutable SSTable run page writer/reader
       wal.py                # Buffered framed Write-Ahead Log for memtable durability
       tree.py               # Disk-backed SSTable LSM Tree (compaction & tombstones)
-tests/                      # 39 unit & integration tests (8 test modules)
+tests/                      # 41 unit & integration tests (8 test modules)
 benchmarks/                 # Reproducible M1/M2 benchmark harness & plotting
 workloads/                  # Deterministic Retail Orders data generator
 docs/

@@ -16,6 +16,7 @@ from ..core import (
     DataType,
 )
 from ..storage import BufferPool, StorageManager
+from .base import IndexProtocol
 from .bplus import BPlusTree
 from .lsm import LSMTree
 
@@ -57,18 +58,15 @@ class IndexManager:
         self.pool = pool
         self.lsm_flush_threshold = lsm_flush_threshold
         self.lsm_compaction_threshold = lsm_compaction_threshold
-        self.indexes: dict[tuple[str, str], tuple[str, BPlusTree | LSMTree]] = {}
+        self.indexes: dict[tuple[str, str], tuple[str, IndexProtocol]] = {}
 
     def drop(self, table: str, field: str) -> None:
+        """Destroy and remove any active or on-disk index state for (table, field)."""
         existing = self.indexes.pop((table, field), None)
         if existing is not None:
             existing[1].destroy()
-        safe = f"{table}.{field}".replace(":", "_")
         self.storage_manager.drop_file(f"index:{table}.{field}:bplus")
         shutil.rmtree(self.directory / table / field, ignore_errors=True)
-        bplus_path = self.storage_manager.root / "indexes" / f"{safe}.bplus.pages"
-        bplus_path.unlink(missing_ok=True)
-        shutil.rmtree(bplus_path.with_suffix(bplus_path.suffix + ".objects"), ignore_errors=True)
 
     @staticmethod
     def _resolve_kind(index_type: str, workload: WorkloadProfile) -> str:
@@ -89,13 +87,14 @@ class IndexManager:
         key_dtype: DataType = DataType.ANY,
         workload: WorkloadProfile | None = None,
         replace: bool = True,
-    ) -> tuple[str, BPlusTree | LSMTree]:
+    ) -> tuple[str, IndexProtocol]:
+        """Create or open a B+ Tree or LSM index according to workload or explicit type."""
         kind = self._resolve_kind(index_type, workload or WorkloadProfile())
         if replace:
             self.drop(table, field)
         name = f"{table}.{field}"
         if kind == "BPLUS":
-            index: BPlusTree | LSMTree = BPlusTree(
+            index: IndexProtocol = BPlusTree(
                 storage_manager=self.storage_manager, pool=self.pool, name=name, key_dtype=key_dtype
             )
         else:
@@ -112,16 +111,19 @@ class IndexManager:
         return kind, index
 
     def add(self, table: str, field: str, key: Any, rid: RID) -> None:
+        """Insert (key, RID) into the index on (table, field) if present."""
         item = self.indexes.get((table, field))
         if item is not None:
             item[1].insert(key, rid)
 
     def remove(self, table: str, field: str, key: Any, rid: RID | None = None) -> None:
+        """Delete matching RID (or all RIDs) for key from the index if present."""
         item = self.indexes.get((table, field))
         if item is not None:
             item[1].delete(key, rid)
 
     def search(self, table: str, field: str, key: Any) -> list[RID] | None:
+        """Lookup RIDs matching key; returns None if no index exists, [] on type mismatch."""
         item = self.indexes.get((table, field))
         if item is None:
             return None
@@ -139,23 +141,31 @@ class IndexManager:
         include_low: bool = True,
         include_high: bool = True,
     ) -> list[tuple[Any, RID]] | None:
+        """Lookup ordered (key, RID) pairs in bounds; returns None if unindexed, [] on type mismatch."""
         item = self.indexes.get((table, field))
         if item is None:
             return None
-        return item[1].range_search(low=low, high=high, include_low=include_low, include_high=include_high)
+        try:
+            return item[1].range_search(low=low, high=high, include_low=include_low, include_high=include_high)
+        except TypeError:
+            return []
 
     def kind(self, table: str, field: str) -> str | None:
+        """Return 'BPLUS' or 'LSM' for an active index, or None if unindexed."""
         item = self.indexes.get((table, field))
         return item[0] if item else None
 
     def disk_bytes(self, table: str, field: str) -> int:
+        """Return physical bytes used by the index on (table, field)."""
         item = self.indexes.get((table, field))
         return item[1].disk_bytes() if item is not None else 0
 
     def flush_all(self) -> None:
+        """Flush all active indexes to backend storage."""
         for _, index in self.indexes.values():
             index.flush()
 
     def close(self) -> None:
+        """Flush and close all active indexes."""
         for _, index in self.indexes.values():
             index.close()

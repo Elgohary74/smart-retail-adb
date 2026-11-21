@@ -77,6 +77,22 @@ class BPlusTreeTests(unittest.TestCase):
         self.assertEqual(tree.search(True), [(0, 2)])
         tree.close()
 
+    def test_bucket_reclamation_and_tight_buffer_pool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = StorageManager(tmp)
+            pool = BufferPool(capacity=2, storage_manager=mgr)
+            with BPlusTree(order=4, storage_manager=mgr, pool=pool, name="T.dup", key_dtype=DataType.STR) as tree:
+                for i in range(600):
+                    tree.insert("dup", (i // 100, i % 100))
+                for i in range(600):
+                    self.assertEqual(tree.delete("dup", (i // 100, i % 100)), 1)
+                self.assertEqual(len(tree), 0)
+                self.assertEqual(tree.search("dup"), [])
+                tree.insert("dup", (9, 9))
+                self.assertEqual(tree.search("dup"), [(9, 9)])
+            pool.close()
+            mgr.close_all()
+
 
 if __name__ == "__main__":
     unittest.main()

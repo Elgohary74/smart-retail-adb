@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ...core import BLOOM_BITS_PER_KEY, BLOOM_NUM_HASHES, RID
 from ...storage import BufferPool, StorageManager
@@ -11,6 +11,14 @@ from .bloom import BloomFilter
 
 OP_STRUCT = "<IIQB"
 OP_SIZE = struct.calcsize(OP_STRUCT)
+_ENTRY_HDR_STRUCT = "<HI"
+_ENTRY_HDR_SIZE = struct.calcsize(_ENTRY_HDR_STRUCT)
+_META_HDR_STRUCT = "<III"
+_META_HDR_SIZE = struct.calcsize(_META_HDR_STRUCT)
+_CHUNK_HDR_STRUCT = "<I"
+_CHUNK_HDR_SIZE = struct.calcsize(_CHUNK_HDR_STRUCT)
+_FENCE_HDR_STRUCT = "<HI"
+_FENCE_HDR_SIZE = struct.calcsize(_FENCE_HDR_STRUCT)
 KEY_TOMBSTONE_PID = 0xFFFFFFFF
 
 OpList = list[tuple[RID | None, int, bool]]
@@ -28,13 +36,17 @@ class SSTableRun:
     max_key: bytes
     bloom: BloomFilter
     fence: list[tuple[bytes, int]]
+    fence_keys: list[bytes] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.fence_keys = [fk for fk, _ in self.fence]
 
 
 def _pack_data_page(buf: bytearray, entries: list[tuple[bytes, OpList]]) -> None:
     pos = HEADER_SIZE
     for kb, ops in entries:
-        struct.pack_into("<HI", buf, pos, len(kb), len(ops))
-        pos += 6
+        struct.pack_into(_ENTRY_HDR_STRUCT, buf, pos, len(kb), len(ops))
+        pos += _ENTRY_HDR_SIZE
         buf[pos:pos + len(kb)] = kb
         pos += len(kb)
         for rid, seq, is_del in ops:
@@ -45,40 +57,47 @@ def _pack_data_page(buf: bytearray, entries: list[tuple[bytes, OpList]]) -> None
     write_header(buf, PageHeader(int(PageType.LSM_DATA), 0, len(entries), pos, len(buf)))
 
 
-def _flush_page(pool: BufferPool, fid: int, entries: list[tuple[bytes, OpList]],
-                fence: list[tuple[bytes, int]]) -> None:
+def _flush_page(
+    pool: BufferPool, fid: int, entries: list[tuple[bytes, OpList]], fence: list[tuple[bytes, int]]
+) -> None:
     if not entries:
         return
     pid, frame = pool.new_page(file_id=fid)
-    fence.append((entries[0][0], pid))
-    _pack_data_page(frame.data, entries)
-    pool.unpin_page(pid, is_dirty=True, file_id=fid)
+    try:
+        fence.append((entries[0][0], pid))
+        _pack_data_page(frame.data, entries)
+    finally:
+        pool.unpin_page(pid, is_dirty=True, file_id=fid)
 
 
 def _encode_meta(min_k: bytes, max_k: bytes, bloom: BloomFilter, fence: list[tuple[bytes, int]]) -> bytes:
     bloom_raw = bloom.to_bytes()
     parts = [
-        struct.pack("<III", len(min_k), len(max_k), len(bloom_raw)),
+        struct.pack(_META_HDR_STRUCT, len(min_k), len(max_k), len(bloom_raw)),
         min_k,
         max_k,
         bloom_raw,
-        struct.pack("<I", len(fence)),
+        struct.pack(_CHUNK_HDR_STRUCT, len(fence)),
     ]
     for fk, pid in fence:
-        parts.append(struct.pack("<HI", len(fk), pid) + fk)
+        parts.append(struct.pack(_FENCE_HDR_STRUCT, len(fk), pid) + fk)
     return b"".join(parts)
 
 
 def _write_meta_pages(pool: BufferPool, fid: int, usable: int, meta_blob: bytes) -> None:
-    chunks = [meta_blob[i:i + usable - 4] for i in range(0, len(meta_blob), usable - 4)]
+    chunk_cap = usable - _CHUNK_HDR_SIZE
+    chunks = [meta_blob[i:i + chunk_cap] for i in range(0, len(meta_blob), chunk_cap)]
     meta_pids: list[int] = []
     for chunk in chunks:
         mpid, mframe = pool.new_page(file_id=fid)
         meta_pids.append(mpid)
-        struct.pack_into("<I", mframe.data, HEADER_SIZE, len(chunk))
-        mframe.data[HEADER_SIZE + 4:HEADER_SIZE + 4 + len(chunk)] = chunk
-        write_header(mframe.data, PageHeader(int(PageType.LSM_META), 0, 1, HEADER_SIZE + 4 + len(chunk), len(mframe.data)))
-        pool.unpin_page(mpid, is_dirty=True, file_id=fid)
+        try:
+            struct.pack_into(_CHUNK_HDR_STRUCT, mframe.data, HEADER_SIZE, len(chunk))
+            end = HEADER_SIZE + _CHUNK_HDR_SIZE + len(chunk)
+            mframe.data[HEADER_SIZE + _CHUNK_HDR_SIZE:end] = chunk
+            write_header(mframe.data, PageHeader(int(PageType.LSM_META), 0, 1, end, len(mframe.data)))
+        finally:
+            pool.unpin_page(mpid, is_dirty=True, file_id=fid)
     for idx in range(len(meta_pids) - 1):
         with pool.pin_page(meta_pids[idx], file_id=fid, dirty=True) as mframe:
             hdr = read_header(mframe.data)
@@ -95,8 +114,10 @@ def _pack_sorted_items(
     cur_size = 0
 
     for kb, ops in sorted_items:
+        if _ENTRY_HDR_SIZE + len(kb) + OP_SIZE > usable:
+            raise ValueError("SSTable key exceeds page payload capacity")
         bloom.add(kb)
-        entry_bytes = 6 + len(kb) + len(ops) * OP_SIZE
+        entry_bytes = _ENTRY_HDR_SIZE + len(kb) + len(ops) * OP_SIZE
         if entry_bytes <= usable:
             if cur_entries and cur_size + entry_bytes > usable:
                 _flush_page(pool, fid, cur_entries, fence)
@@ -106,7 +127,7 @@ def _pack_sorted_items(
         else:
             _flush_page(pool, fid, cur_entries, fence)
             cur_entries, cur_size = [], 0
-            max_ops = max(1, (usable - 6 - len(kb)) // OP_SIZE)
+            max_ops = (usable - _ENTRY_HDR_SIZE - len(kb)) // OP_SIZE
             for i in range(0, len(ops), max_ops):
                 _flush_page(pool, fid, [(kb, ops[i:i + max_ops])], fence)
     _flush_page(pool, fid, cur_entries, fence)
@@ -121,6 +142,9 @@ def write_sstable_run(
     rel_path: str,
     sorted_items: list[tuple[bytes, OpList]],
 ) -> SSTableRun:
+    """Write sorted (key_bytes, ops) entries and metadata into a new SSTable run file."""
+    if not sorted_items:
+        raise ValueError("Cannot write an empty SSTable run")
     fid, backend = storage_manager.open_file(logical_name, rel_path)
     usable = backend.usable_page_size - HEADER_SIZE
     bloom, fence = _pack_sorted_items(pool, fid, usable, sorted_items)
@@ -131,41 +155,48 @@ def write_sstable_run(
     return SSTableRun(run_id, logical_name, fid, data_pages, sorted_items[0][0], sorted_items[-1][0], bloom, fence)
 
 
-def read_sstable_meta(pool: BufferPool, run_id: int, lname: str, fid: int, meta_pid: int) -> SSTableRun:
+def _read_meta_blob(pool: BufferPool, fid: int, meta_pid: int) -> bytes:
     chunks: list[bytes] = []
     pid = meta_pid
     while pid != -1:
         with pool.pin_page(pid, file_id=fid) as frame:
             hdr = read_header(frame.data)
-            clen = struct.unpack_from("<I", frame.data, HEADER_SIZE)[0]
-            chunks.append(bytes(frame.data[HEADER_SIZE + 4:HEADER_SIZE + 4 + clen]))
+            clen = struct.unpack_from(_CHUNK_HDR_STRUCT, frame.data, HEADER_SIZE)[0]
+            start = HEADER_SIZE + _CHUNK_HDR_SIZE
+            chunks.append(bytes(frame.data[start:start + clen]))
             pid = hdr.next_page
-    blob = b"".join(chunks)
-    min_len, max_len, bloom_len = struct.unpack_from("<III", blob, 0)
-    pos = 12
+    return b"".join(chunks)
+
+
+def read_sstable_meta(pool: BufferPool, run_id: int, lname: str, fid: int, meta_pid: int) -> SSTableRun:
+    """Reconstruct an SSTableRun handle (Bloom filter + fence pointers) from meta pages."""
+    blob = _read_meta_blob(pool, fid, meta_pid)
+    min_len, max_len, bloom_len = struct.unpack_from(_META_HDR_STRUCT, blob, 0)
+    pos = _META_HDR_SIZE
     min_k, max_k = blob[pos:pos + min_len], blob[pos + min_len:pos + min_len + max_len]
     pos += min_len + max_len
     bloom = BloomFilter.from_bytes(blob[pos:pos + bloom_len])
     pos += bloom_len
-    fcount = struct.unpack_from("<I", blob, pos)[0]
-    pos += 4
+    fcount = struct.unpack_from(_CHUNK_HDR_STRUCT, blob, pos)[0]
+    pos += _CHUNK_HDR_SIZE
     fence: list[tuple[bytes, int]] = []
     for _ in range(fcount):
-        fklen, dpid = struct.unpack_from("<HI", blob, pos)
-        pos += 6
+        fklen, dpid = struct.unpack_from(_FENCE_HDR_STRUCT, blob, pos)
+        pos += _FENCE_HDR_SIZE
         fence.append((blob[pos:pos + fklen], dpid))
         pos += fklen
     return SSTableRun(run_id, lname, fid, meta_pid, min_k, max_k, bloom, fence)
 
 
 def read_sstable_page(pool: BufferPool, fid: int, pid: int) -> list[tuple[bytes, OpList]]:
+    """Decode all (key_bytes, ops) entries from one LSM_DATA page."""
     with pool.pin_page(pid, file_id=fid) as frame:
         hdr = read_header(frame.data)
         pos = HEADER_SIZE
         entries: list[tuple[bytes, OpList]] = []
         for _ in range(hdr.item_count):
-            klen, op_count = struct.unpack_from("<HI", frame.data, pos)
-            pos += 6
+            klen, op_count = struct.unpack_from(_ENTRY_HDR_STRUCT, frame.data, pos)
+            pos += _ENTRY_HDR_SIZE
             kb = bytes(frame.data[pos:pos + klen])
             pos += klen
             ops: OpList = []

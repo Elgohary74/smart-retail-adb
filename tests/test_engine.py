@@ -87,7 +87,7 @@ class EngineTests(unittest.TestCase):
                 db.insert("T", {"id": i, "val": f"v{i}"})
             # Close raw backend handles WITHOUT calling db.close()
             idx = db.index_manager.indexes[("T", "id")][1]
-            idx._wal_file.close()
+            idx.wal.close()
             db.storage_manager.close_all()
 
             reopened = SmartRetailDB(root)

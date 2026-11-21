@@ -42,6 +42,7 @@ src/smartdb/
 │   ├── pages/               24-byte PageHeader (header.py), SlottedPage, OVERFLOW chains
 │   └── tables/              TableStorage (base.py), RowTable, ColumnTable, column_codec (ColumnStream)
 ├── indexes/              -> M2 indexing layer
+│   ├── base.py              IndexProtocol & key_in_range helper
 │   ├── manager.py           IndexManager, WorkloadProfile & choose_index_type
 │   ├── bplus/               Page-backed BPlusTree, node codecs, RID overflow buckets
 │   └── lsm/                 LSMTree, BloomFilter, SSTable writer/reader, LSMWal
@@ -71,7 +72,7 @@ src/smartdb/
 
 ### Run Tests
 ```bash
-# Full suite (39 tests)
+# Full suite (41 tests)
 PYTHONPATH=src python -m unittest discover -s tests -v
 
 # Single test module while iterating

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from smartdb.core import DataType
-from smartdb.indexes import BloomFilter, LSMTree
+from smartdb.indexes import BloomFilter, IndexManager, LSMTree
 from smartdb.storage import BufferPool, StorageManager, make_aes_gcm_crypto
 
 
@@ -25,7 +25,7 @@ class LSMTreeTests(unittest.TestCase):
             for i in range(50):
                 lsm.insert(i, (0, i))
             # Simulate unclean exit: close only raw WAL handle without flushing memtable
-            lsm._wal_file.close()
+            lsm.wal.close()
 
             reopened = LSMTree(tmp, flush_threshold=128, key_dtype=DataType.INT)
             self.assertEqual(reopened.search(25), [(0, 25)])
@@ -100,6 +100,34 @@ class LSMTreeTests(unittest.TestCase):
             lsm2.close()
             pool2.close()
             mgr2.close_all()
+
+    def test_destroy_guards_and_range_type_consistency(self):
+        with self.assertRaises(ValueError):
+            BloomFilter.from_bytes(b"short")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = StorageManager(tmp)
+            pool = BufferPool(capacity=8, storage_manager=mgr)
+            idx_mgr = IndexManager(Path(tmp) / "idx", mgr, pool)
+            _, idx = idx_mgr.create("T", "k", index_type="LSM", key_dtype=DataType.INT)
+            idx.insert(10, (0, 1))
+            idx.flush()
+            self.assertEqual(idx_mgr.search("T", "k", "bad"), [])
+            self.assertEqual(idx_mgr.range_search("T", "k", "a", "z"), [])
+
+            idx.destroy()
+            self.assertFalse((Path(tmp) / "idx" / "T" / "k" / "T.k_manifest.json").exists())
+            self.assertFalse((Path(tmp) / "idx" / "T" / "k" / "T.k_memtable.wal").exists())
+
+            lsm_reopen = LSMTree(Path(tmp) / "idx" / "T" / "k", storage_manager=mgr, pool=pool, name_prefix="T.k", key_dtype=DataType.STR)
+            self.assertEqual(lsm_reopen.run_count, 0)
+            self.assertEqual(lsm_reopen.search("anything"), [])
+            lsm_reopen.insert("x" * 4500, (0, 2))
+            with self.assertRaises(ValueError):
+                lsm_reopen.flush()
+            lsm_reopen.destroy()
+            pool.close()
+            mgr.close_all()
 
 
 if __name__ == "__main__":
