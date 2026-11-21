@@ -1,101 +1,57 @@
 # Smart Retail DB — Milestones 1 and 2
 
-A small educational DBMS implemented in Python using the course's retail-orders example. The core data path is custom page storage and custom indexes; it does **not** use SQLite, PostgreSQL, MySQL, or another database engine.
+A custom educational DBMS implemented in Python using the course's retail-orders domain (`Products`, `Customers`, `Orders`, `OrderItems`, `Inventory`). Core storage, buffering, and indexing are implemented from scratch with zero external database engines.
 
 ## What's implemented
 
 ### M1 — Storage engine foundation
-- Persistent fixed-size 4,096-byte pages.
-- Configurable FIFO or LRU buffer pool with dirty-page write-back and counters for hits, misses, reads, writes, evictions, and hit rate.
-- Row-oriented and column-oriented encodings for records in pages.
-- Repeatable benchmark comparing FIFO and LRU with the same deterministic trace.
+- Persistent 4,096-byte pages (`PageFile` and `LocalObjectStore`) with a 24-byte `PageHeader` reserving `lsn` for M4 WAL/ARIES.
+- Single shared database-wide `BufferPool` keyed by `(file_id, page_id)` with `FIFO`/`LRU` eviction, `pin`/`unpin`, dirty write-back, and hit/miss/I/O counters.
+- Typed schemas (`INT`, `FLOAT`, `BOOL`, `STR`, `BYTES`, `VECTOR(D)`, `ANY`) with binary `RowTable` (slotted pages + overflow chains) and `ColumnTable` (per-column page streams, projection pushdown, late materialization, vectorized batches).
+- Reproducible 5-run M1 benchmarks (FIFO vs. LRU, Row vs. Column projection, `page` vs. `objects` vs. AES-GCM).
 
 ### M2 — Advanced indexing
-- B+ Tree index with leaf links, duplicate-key buckets, point lookup, and range lookup.
-- LSM Tree index with an in-memory memtable, sorted JSONL runs on disk, point/range lookup, and compaction.
-- `auto` index selection: write-heavy workloads choose LSM; otherwise choose B+ Tree. This is a documented heuristic, not a learned optimizer.
-- A local object-store backend (one page per object file) behind the same page interface.
-- Optional encryption/decryption transform hooks. They are **hooks only**; the default does not encrypt. Supply paired, same-length transforms from an approved cryptographic implementation if encryption is required.
-- Restricted SQL-like `SELECT * FROM table [WHERE field = literal]` with indexed equality lookup when an index exists. The grammar rejects expressions such as `OR 1=1`; it is intentionally not a full SQL parser.
+- Persistent page-backed `BPlusTree` (`BPLUS_META`, `BPLUS_INTERNAL`, `BPLUS_LEAF`, overflow RID buckets) supporting equality, range, and delete.
+- Disk-backed SSTable `LSMTree` over `StorageManager`/`BufferPool` with Bloom filters, sparse fence pointers, entry-count memtable flush, buffered `memtable.wal`, tombstones, and atomic compaction.
+- Workload-based `auto` index selection (`choose_index_type`) using explicit or observed table telemetry.
+- `TransformingBackend` supporting `(page_id, data) -> bytes` hooks and `make_aes_gcm_hooks(key)` (28-byte AES-256-GCM per-page envelope).
+- Safe SQL subset (`CREATE TABLE`, `INSERT`, `SELECT` projection + `=`/`<`/`<=`/`>`/`>=`/`BETWEEN`/`IS NULL`/`IS NOT NULL`, `UPDATE`, `DELETE`, `CREATE INDEX`).
 
-## Quick start (Windows PowerShell)
+## Quick start
 
-```powershell
-cd smart-retail-db
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e .
-python -m unittest discover -s tests -v
+```bash
+cd smart-retail-adb
+python3 -m venv .venv
+source .venv/bin/activate
+PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
-No third-party runtime dependencies are needed. The test suite uses Python's standard `unittest` framework.
+*(On Windows PowerShell, use `.\.venv\Scripts\Activate.ps1` and `$env:PYTHONPATH="src"`.)*
 
 ## Run the CLI
 
-```powershell
-smartdb --db .\retail_data
+```bash
+PYTHONPATH=src python -m smartdb.cli --db ./retail_data
 ```
 
-Try these commands in the prompt:
+Example session:
 
 ```sql
-CREATE TABLE Products (product_id, name, category, price, stock) LAYOUT ROW;
+CREATE TABLE Products (product_id INT, name STR, category STR, price FLOAT, stock INT) LAYOUT ROW;
 INSERT INTO Products VALUES (1, 'Keyboard', 'Accessories', 29.99, 20);
 INSERT INTO Products VALUES (2, 'Mouse', 'Accessories', 15.50, 35);
-SELECT * FROM Products;
-SELECT * FROM Products WHERE product_id = 1;
-CREATE INDEX ON Products (product_id) USING AUTO READS 100 WRITES 10;
-SELECT * FROM Products WHERE product_id = 1;
+CREATE INDEX ON Products (price) USING BPLUS;
+SELECT product_id, name FROM Products WHERE price BETWEEN 10.0 AND 30.0;
+:explain SELECT product_id, name FROM Products WHERE price BETWEEN 10.0 AND 30.0
+:stats
 ```
 
-Then use `:explain SELECT * FROM Products WHERE product_id = 1` to see whether the engine picks a table scan or index lookup. `:stats` prints buffer-pool statistics.
+## Generate demo dataset & run benchmarks
 
-Use `--backend objects` to store pages as separate local object files:
-
-```powershell
-smartdb --db .\retail_objects --backend objects
+```bash
+PYTHONPATH=src python workloads/generate_retail_data.py --db ./retail_data --products 10000 --customers 1000 --orders 5000 --seed 42
+PYTHONPATH=src python benchmarks/benchmark_storage.py --pages 128 --accesses 10000 --records 2000 --repeats 5
+PYTHONPATH=src python benchmarks/benchmark_indexes.py --records 2000 --repeats 5
 ```
 
-The backend is a local adapter to demonstrate the object-storage abstraction; it is not an S3 client.
-
-## Generate a demo dataset
-
-```powershell
-python .\workloads\generate_retail_data.py --db .\retail_data --products 10000 --customers 1000 --orders 5000 --seed 42
-```
-
-To use object-backed pages, add `--backend objects`. The data is synthetic and generated with a fixed seed. The generator appends to existing tables when their schemas match; it does not delete existing database contents. Use a separate `--db` directory for a fresh dataset. Adjust sizes to your computer. The generator is intended for a first benchmark/demo, not a replacement for the TPC-H subset required in M3.
-
-## Benchmarks
-
-Run each benchmark multiple times and report the median; a single run is not sufficient for a final report.
-The index benchmark runs three repetitions by default, checks lookup correctness, and writes per-run and median write/point-lookup results. Override the count with `--repeats`.
-
-```powershell
-python .\benchmarks\benchmark_storage.py --pages 128 --accesses 10000 --capacity 16 --seed 42
-python .\benchmarks\benchmark_indexes.py --records 10000 --seed 42
-```
-
-CSV results are written to `benchmark_results/`. Keep your Python version, OS, CPU/RAM, seed, page count, buffer capacity, and command line with your final measurements. Timings vary by machine; do not copy example numbers from another system.
-
-## Project structure
-
-```text
-src/smartdb/
-  engine.py                 high-level database API
-  cli.py                    interactive command line
-  query.py                  restricted safe SELECT parser
-  storage/page_file.py      persistent fixed-size pages
-  storage/buffer_pool.py    FIFO/LRU cache and metrics
-  storage/layouts.py        row/column page encoding
-  storage/table.py          page-backed records and locators
-  storage/object_store.py   local object-store adapter
-  storage/encryption.py     optional same-length transform hooks
-  indexes/bplus_tree.py     B+ Tree
-  indexes/lsm_tree.py       LSM memtable, disk runs, compaction
-  indexes/manager.py        auto index choice and common interface
-tests/                      storage, index, and integration tests
-benchmarks/                 M1 and M2 benchmark scripts
-workloads/                  reproducible synthetic data generator
-```
-
+Pass `--plots` to save PNG charts alongside the CSVs in `benchmark_results/` (requires `matplotlib`).

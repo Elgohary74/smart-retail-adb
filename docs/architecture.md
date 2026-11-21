@@ -1,12 +1,10 @@
 # Architecture decisions — M1/M2
 
-1. **Page size:** fixed 4,096 bytes, with a four-byte payload-length header in data pages.
-2. **Persistent storage:** `PageFile` stores pages contiguously in one binary file. `LocalObjectStore` exposes the same interface, but stores each page in a separate local object file.
-3. **Buffer pool:** FIFO and LRU use an ordered frame map; dirty pages are written on eviction or explicit flush. Metrics are exposed through `BufferPool.snapshot()`.
-4. **Record layouts:** row format stores a list of records; column format stores one list per field. Both are encoded as JSON payloads inside a fixed-size page.
-5. **Record locators:** `(page_id, row_offset)` allows indexes to locate a row without scanning the table.
-6. **B+ Tree:** keys and locators are held in leaf nodes; leaf links enable range scans. The implementation is rebuildable from storage.
-7. **LSM Tree:** writes go to a memtable. At a configurable threshold, data is sorted and written to immutable JSON Lines runs. Compaction merges runs.
-8. **Auto-selection heuristic:** choose LSM if `writes > 2 * max(1, reads)`; otherwise choose B+ Tree. Benchmark against representative workload traces and tune the rule if results support it.
-9. **Restricted query parser:** supports only `SELECT * FROM table` and equality predicates with scalar literals. Values are parsed with `ast.literal_eval`, not executed as SQL or Python code.
-10. **Security boundary:** encryption is exposed through same-length transform hooks; actual encryption must be supplied externally. The hooks are not cryptography by themselves.
+1. **Common Page Header:** 24-byte `PageHeader` (`<BBHHHqii`) at offset 0 of every usable page, reserving `lsn` (`int64`) for M4 ARIES recovery and `next_page`/`prev_page` for overflow and B+ Tree leaf chains.
+2. **Storage Backends:** `PageFile` (contiguous binary file) and `LocalObjectStore` (one `.obj` file per page, cached `_page_count`) share the `PageBackend` protocol behind `StorageManager`.
+3. **Page-Aware Encryption Hooks:** `TransformingBackend` wraps any `PageBackend` with `(page_id, bytes) -> bytes` transforms and optional `overhead_bytes` (e.g., 28B AES-256-GCM nonce + tag via `make_aes_gcm_hooks`), keeping physical pages fixed at 4,096 bytes.
+4. **Shared Buffer Pool:** Single DB-wide `BufferPool` keyed by `(file_id, page_id)` with `pin_page`/`unpin_page`, `FIFO`/`LRU` eviction, dirty write-back, and `wal_flushed_lsn_fn` guard.
+5. **Typed Binary Tables:** `TableSchema` (`INT`, `FLOAT`, `BOOL`, `STR`, `BYTES`, `VECTOR(D)`, `ANY`) enforces type safety (`bool != int`, finite floats) and lossless order-preserving key encoding. `RowTable` uses binary slotted pages + `OVERFLOW` chains; `ColumnTable` uses per-column page streams + deleted bitmap for projection pushdown and vectorized batches.
+6. **Storage-Connected Indexes:** `BPlusTree` persists internal/leaf/bucket pages via `StorageManager` + `BufferPool`; `LSMTree` stores SSTable runs in `StorageManager` + `BufferPool` with Bloom filters, sparse fence pointers, entry-count memtable flushes, buffered `memtable.wal`, and atomic manifest compaction.
+7. **Crash-Consistency Boundary (Pre-M4):** `SmartRetailDB` tracks `clean_shutdown` in `catalog.json` and reconciles indexes on reopen after an unclean exit, avoiding `IndexError` crashes without per-insert `fsync` overhead before M4 WAL.
+8. **Auto-Selection Rule:** `choose_index_type(reads, writes, range_reads=0)` picks `LSM` for write-heavy point workloads (`writes > reads * 2 and range_reads == 0`, or write-only), and `BPLUS` otherwise.
