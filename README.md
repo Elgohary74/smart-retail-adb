@@ -13,18 +13,18 @@ A custom educational relational and vector-capable database management system im
 ## Implemented Milestones
 
 ### Milestone 1 — Storage Engine Foundation
-- **Persistent Page Backends:** Fixed `4,096`-byte physical pages via contiguous files ([page_file.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/backends/page_file.py)) or one-object-per-page directories ([object_store.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/backends/object_store.py)) behind a shared `PageBackend` protocol and `StorageManager`.
-- **Shared Database-Wide Buffer Pool:** Single `BufferPool` ([buffer_pool.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/buffer_pool.py)) caching `(file_id, page_id)` frames across all tables and indexes with configurable `LRU`/`FIFO` eviction, `pin_page`/`unpin_page`, dirty write-back, WAL-LSN flush guard hook, and hit/miss/I/O counters.
-- **Typed Schemas & Binary Layouts:** [schema.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/core/schema.py) supports `INT`, `FLOAT`, `BOOL`, `STR`, `BYTES`, `VECTOR(D)`, and `ANY` with strict `bool` vs. `int` separation and lossless order-preserving key encoding.
-  - **`RowTable`** ([row.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/tables/row.py)): Binary slotted pages (`(page_id, slot_id)` RIDs) with stable slots, in-place/relocating updates, tombstones, and linked `OVERFLOW` pages for records >4 KB (including large embeddings).
-  - **`ColumnTable`** ([column.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/tables/column.py)): Dedicated per-column page streams + deleted-row bitmap supporting column projection pushdown, late materialization, and vectorized `scan_batches`.
+- **Persistent Page Backends:** Fixed `4,096`-byte physical pages via contiguous files ([page_file.py](src/smartdb/storage/backends/page_file.py)) or one-object-per-page directories ([object_store.py](src/smartdb/storage/backends/object_store.py)) behind a shared `PageBackend` protocol and `StorageManager`.
+- **Shared Database-Wide Buffer Pool:** Single `BufferPool` ([buffer_pool.py](src/smartdb/storage/buffer_pool.py)) caching `(file_id, page_id)` frames across all tables and indexes with configurable `LRU`/`FIFO` eviction, `pin_page`/`unpin_page`, dirty write-back, WAL-LSN flush guard hook, `usable_page_size()`, and hit/miss/I/O counters.
+- **Typed Schemas & Binary Layouts:** [schema.py](src/smartdb/core/schema.py) supports `INT`, `FLOAT`, `BOOL`, `STR`, `BYTES`, `VECTOR(D)`, and `ANY` with strict `bool` vs. `int` separation and lossless order-preserving key encoding.
+  - **`RowTable`** ([row.py](src/smartdb/storage/tables/row.py)): Binary slotted pages (`(page_id, slot_id)` RIDs) with stable slots, in-place/relocating updates, tombstones, and linked `OVERFLOW` pages for records >4 KB (including large embeddings).
+  - **`ColumnTable`** ([column.py](src/smartdb/storage/tables/column.py)): Dedicated per-column page streams + deleted-row bitmap supporting column projection pushdown, late materialization, and vectorized `scan_batches`.
 
 ### Milestone 2 — Advanced Indexing System
-- **Page-Backed B+ Tree** ([tree.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/bplus/tree.py)): Persistent `BPLUS_META`, `BPLUS_INTERNAL`, and doubly-linked `BPLUS_LEAF` pages inside `StorageManager` + `BufferPool`, supporting equality, inclusive/exclusive range scans, deletes, and overflow RID buckets for high-duplicate keys.
-- **Disk-Backed SSTable LSM Tree** ([tree.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/lsm/tree.py)): Entry-count memtable + framed `memtable.wal`, immutable `LSM_DATA`/`LSM_META` SSTable runs stored in `StorageManager` + `BufferPool`, `blake2b` Bloom filters, sparse fence pointers, tombstone sequence resolution, and atomic manifest compaction.
-- **Workload-Driven Index Selection** ([manager.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/manager.py)): `choose_index_type(reads, writes, range_reads)` uses observed table telemetry (or explicit counts) to pick `LSM` for write-heavy point workloads and `BPLUS` for read-heavy or range workloads.
-- **Page-Aware Encryption Hooks** ([encryption.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/backends/encryption.py)): `TransformingBackend` wraps any backend with `(page_id, bytes) -> bytes` hooks and configurable `overhead_bytes`, plus `make_aes_gcm_hooks(key)` for authenticated AES-256-GCM encryption on pages and WAL records.
-- **Safe Restricted SQL/DML Engine** ([parser.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/query/parser.py), [db.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/engine/db.py)): Parses literals via `ast.literal_eval` (rejecting SQL injection, expressions, and `NaN`/`Inf`) and enforces SQL three-valued `NULL` logic.
+- **Page-Backed B+ Tree** ([tree.py](src/smartdb/indexes/bplus/tree.py)): Persistent `BPLUS_META`, `BPLUS_INTERNAL`, and doubly-linked `BPLUS_LEAF` pages inside `StorageManager` + `BufferPool`, supporting equality, inclusive/exclusive range scans, deletes, and overflow RID buckets for high-duplicate keys.
+- **Disk-Backed SSTable LSM Tree** ([tree.py](src/smartdb/indexes/lsm/tree.py)): Entry-count memtable + framed `memtable.wal`, immutable `LSM_DATA`/`LSM_META` SSTable runs stored in `StorageManager` + `BufferPool`, `blake2b` Bloom filters, sparse fence pointers, tombstone sequence resolution, and atomic manifest compaction.
+- **Workload-Driven Index Selection** ([manager.py](src/smartdb/indexes/manager.py)): `choose_index_type(reads, writes, range_reads)` uses observed table telemetry (`WorkloadProfile`) to pick `LSM` for write-heavy point workloads and `BPLUS` for read-heavy or range workloads.
+- **Page-Aware Encryption Hooks** ([encryption.py](src/smartdb/storage/backends/encryption.py)): `TransformingBackend` wraps any backend with `(page_id, bytes) -> bytes` hooks and configurable `overhead_bytes`, configured via `CryptoHooks` and `make_aes_gcm_crypto(key)` (or raw-tuple `make_aes_gcm_hooks(key)`) for authenticated AES-256-GCM encryption on pages and WAL records.
+- **Safe Restricted SQL/DML Engine** ([parser.py](src/smartdb/query/parser.py), [db.py](src/smartdb/engine/db.py)): Parses literals via `ast.literal_eval` (rejecting SQL injection, expressions, and `NaN`/`Inf`) and enforces SQL three-valued `NULL` logic.
 
 ---
 
@@ -32,7 +32,7 @@ A custom educational relational and vector-capable database management system im
 
 - **Python:** `>= 3.10`
 - **Core Runtime Dependencies:** None (pure Python standard library).
-- **Optional Extras:** `cryptography` (for `make_aes_gcm_hooks`) and `matplotlib` (for `--plots` benchmark charts).
+- **Optional Extras:** `cryptography` (for `make_aes_gcm_crypto`) and `matplotlib` (for `--plots` benchmark charts).
 
 ### Linux / macOS
 
@@ -131,8 +131,8 @@ PYTHONPATH=src python benchmarks/benchmark_indexes.py --records 2000 --repeats 5
 
 | Script | Scenarios Measured | Output CSV |
 | :--- | :--- | :--- |
-| [benchmark_storage.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/benchmarks/benchmark_storage.py) | FIFO vs. LRU trace; Row vs. Column 2-column projection scan; `page` vs. `objects` vs. AES-GCM insert throughput | `benchmark_results/m1_storage.csv` |
-| [benchmark_indexes.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/benchmarks/benchmark_indexes.py) | Full scan vs. B+ Tree vs. LSM point lookup; Write-heavy (`80W/20R`) vs. Read-heavy (`90R/10W`) vs. Range scan; index disk footprint | `benchmark_results/m2_indexes.csv` |
+| [benchmark_storage.py](benchmarks/benchmark_storage.py) | FIFO vs. LRU trace; Row vs. Column 2-column projection scan; `page` vs. `objects` vs. AES-GCM insert throughput | `benchmark_results/m1_storage.csv` |
+| [benchmark_indexes.py](benchmarks/benchmark_indexes.py) | Full scan vs. B+ Tree vs. LSM point lookup; Write-heavy (`80W/20R`) vs. Read-heavy (`90R/10W`) vs. Range scan; index disk footprint | `benchmark_results/m2_indexes.csv` |
 
 ---
 
@@ -177,12 +177,14 @@ src/smartdb/
       sstable.py            # Immutable SSTable run page writer/reader
       wal.py                # Buffered framed Write-Ahead Log for memtable durability
       tree.py               # Disk-backed SSTable LSM Tree (compaction & tombstones)
-tests/                      # 36 unit & integration tests (8 test modules)
+tests/                      # 39 unit & integration tests (8 test modules)
 benchmarks/                 # Reproducible M1/M2 benchmark harness & plotting
 workloads/                  # Deterministic Retail Orders data generator
 docs/
+  project-overview.md       # System summary, Retail Orders domain, request flow
+  developer-guide.md        # Onboarding reading order, package ownership, invariants
   architecture.md           # Component interfaces, binary page formats, and M3-M5 integration design
   milestone-checklist.md    # M1/M2 verification checklist
 ```
 
-See [docs/architecture.md](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/docs/architecture.md) for binary page layouts, design rationale, and how Milestones 3–5 integrate on top of this engine.
+See [docs/architecture.md](docs/architecture.md) for binary page layouts, design rationale, and how Milestones 3–5 integrate on top of this engine.

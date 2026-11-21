@@ -25,6 +25,12 @@ def _serialize_any(value: Any) -> bytes:
     raise TypeError(f"Unsupported value type for ANY: {type(value).__name__}")
 
 
+def _require_dim(dim: int | None) -> int:
+    if dim is None or dim < 1:
+        raise ValueError("VECTOR codec requires positive dim")
+    return dim
+
+
 def serialize_value(dtype: DataType, value: Any, dim: int | None = None) -> bytes:
     if dtype == DataType.INT:
         return struct.pack("<q", value)
@@ -38,8 +44,7 @@ def serialize_value(dtype: DataType, value: Any, dim: int | None = None) -> byte
     if dtype == DataType.BYTES:
         return struct.pack("<I", len(value)) + value
     if dtype == DataType.VECTOR:
-        assert dim is not None
-        return struct.pack(f"<{dim}f", *value)
+        return struct.pack(f"<{_require_dim(dim)}f", *value)
     return _serialize_any(value)
 
 
@@ -75,8 +80,8 @@ def deserialize_value(dtype: DataType, buf: bytes | memoryview, offset: int = 0,
         length = struct.unpack_from("<I", buf, offset)[0]
         return bytes(buf[offset + 4:offset + 4 + length]), offset + 4 + length
     if dtype == DataType.VECTOR:
-        assert dim is not None
-        return list(struct.unpack_from(f"<{dim}f", buf, offset)), offset + 4 * dim
+        vdim = _require_dim(dim)
+        return list(struct.unpack_from(f"<{vdim}f", buf, offset)), offset + 4 * vdim
     return _deserialize_any(buf, offset)
 
 
@@ -88,8 +93,7 @@ def _skip_value(dtype: DataType, buf: bytes | memoryview, offset: int, dim: int 
     if dtype in (DataType.STR, DataType.BYTES):
         return offset + 4 + struct.unpack_from("<I", buf, offset)[0]
     if dtype == DataType.VECTOR:
-        assert dim is not None
-        return offset + 4 * dim
+        return offset + 4 * _require_dim(dim)
     tag = buf[offset]
     if tag == 1:
         return offset + 2

@@ -7,7 +7,7 @@ from smartdb.core import ColumnSpec, DataType
 from smartdb.engine import SmartRetailDB
 from smartdb.indexes import choose_index_type
 from smartdb.query import parse_sql
-from smartdb.storage import make_aes_gcm_hooks
+from smartdb.storage import make_aes_gcm_crypto
 
 
 class EngineTests(unittest.TestCase):
@@ -129,16 +129,8 @@ class EngineTests(unittest.TestCase):
     def test_object_backend_with_aes_gcm_and_injection_rejection(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "sec_obj"
-            enc, dec, ovh, rec_enc, rec_dec = make_aes_gcm_hooks(os.urandom(32))
-            db = SmartRetailDB(
-                root,
-                backend_kind="objects",
-                encrypt_page=enc,
-                decrypt_page=dec,
-                crypto_overhead=ovh,
-                encrypt_record=rec_enc,
-                decrypt_record=rec_dec,
-            )
+            crypto = make_aes_gcm_crypto(os.urandom(32))
+            db = SmartRetailDB(root, backend_kind="objects", crypto=crypto)
             db.create_table("Products", [ColumnSpec("id", DataType.INT), ColumnSpec("name", DataType.STR)], "column")
             db.create_index("Products", "id", "LSM")
             db.insert("Products", {"id": 7, "name": "Monitor"})
@@ -148,15 +140,7 @@ class EngineTests(unittest.TestCase):
                 parse_sql("SELECT * FROM Products WHERE id = 1+2j")
             db.close()
 
-            reopened = SmartRetailDB(
-                root,
-                backend_kind="objects",
-                encrypt_page=enc,
-                decrypt_page=dec,
-                crypto_overhead=ovh,
-                encrypt_record=rec_enc,
-                decrypt_record=rec_dec,
-            )
+            reopened = SmartRetailDB(root, backend_kind="objects", crypto=crypto)
             self.assertEqual(reopened.execute("SELECT name FROM Products WHERE id = 7"), [{"name": "Monitor"}])
             reopened.close()
 

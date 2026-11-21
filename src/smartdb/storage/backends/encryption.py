@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import Callable
 
 from ...core.config import AES_GCM_OVERHEAD_BYTES
@@ -9,6 +10,23 @@ from .page_file import PageBackend
 
 PageTransform = Callable[[int, bytes], bytes]
 RecordTransform = Callable[[bytes], bytes]
+
+
+@dataclass(frozen=True)
+class CryptoHooks:
+    """Paired page-level and optional record-level encryption/decryption hooks."""
+
+    page_encrypt: PageTransform | None = None
+    page_decrypt: PageTransform | None = None
+    overhead_bytes: int = 0
+    record_encrypt: RecordTransform | None = None
+    record_decrypt: RecordTransform | None = None
+
+    def __post_init__(self) -> None:
+        if (self.page_encrypt is None) != (self.page_decrypt is None):
+            raise ValueError("Provide both page_encrypt and page_decrypt, or neither")
+        if (self.record_encrypt is None) != (self.record_decrypt is None):
+            raise ValueError("Provide both record_encrypt and record_decrypt, or neither")
 
 
 class TransformingBackend:
@@ -71,29 +89,18 @@ class TransformingBackend:
         self.backend.destroy()
 
 
-def make_aes_gcm_hooks(
-    key: bytes,
-) -> tuple[PageTransform, PageTransform, int, RecordTransform, RecordTransform]:
-    """Return (page_enc, page_dec, 28, rec_enc, rec_dec) using AES-256-GCM.
-
-    Requires the optional `cryptography` package. Each page stores a 12-byte
-    random nonce + ciphertext + 16-byte GCM tag (28 bytes total overhead),
-    authenticated with page_id as AAD.
-    """
+def make_aes_gcm_crypto(key: bytes) -> CryptoHooks:
+    """Build AES-256-GCM page and WAL record hooks (requires optional `cryptography`)."""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     aes = AESGCM(key)
-    overhead = AES_GCM_OVERHEAD_BYTES
 
     def page_encrypt(page_id: int, plaintext: bytes) -> bytes:
         nonce = os.urandom(12)
-        aad = page_id.to_bytes(8, "big")
-        return nonce + aes.encrypt(nonce, plaintext, aad)
+        return nonce + aes.encrypt(nonce, plaintext, page_id.to_bytes(8, "big"))
 
     def page_decrypt(page_id: int, raw: bytes) -> bytes:
-        nonce, ct = raw[:12], raw[12:]
-        aad = page_id.to_bytes(8, "big")
-        return aes.decrypt(nonce, ct, aad)
+        return aes.decrypt(raw[:12], raw[12:], page_id.to_bytes(8, "big"))
 
     def record_encrypt(plaintext: bytes) -> bytes:
         nonce = os.urandom(12)
@@ -102,4 +109,14 @@ def make_aes_gcm_hooks(
     def record_decrypt(raw: bytes) -> bytes:
         return aes.decrypt(raw[:12], raw[12:], b"wal")
 
-    return page_encrypt, page_decrypt, overhead, record_encrypt, record_decrypt
+    return CryptoHooks(page_encrypt, page_decrypt, AES_GCM_OVERHEAD_BYTES, record_encrypt, record_decrypt)
+
+
+def make_aes_gcm_hooks(
+    key: bytes,
+) -> tuple[PageTransform, PageTransform, int, RecordTransform, RecordTransform]:
+    """Return (page_enc, page_dec, overhead, rec_enc, rec_dec) using AES-256-GCM."""
+    hooks = make_aes_gcm_crypto(key)
+    if hooks.page_encrypt is None or hooks.page_decrypt is None or hooks.record_encrypt is None or hooks.record_decrypt is None:
+        raise RuntimeError("AES-GCM hooks failed to initialize")
+    return hooks.page_encrypt, hooks.page_decrypt, hooks.overhead_bytes, hooks.record_encrypt, hooks.record_decrypt

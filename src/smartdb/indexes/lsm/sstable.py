@@ -18,6 +18,8 @@ OpList = list[tuple[RID | None, int, bool]]
 
 @dataclass
 class SSTableRun:
+    """In-memory handle for an immutable SSTable run (Bloom filter + sparse fence)."""
+
     run_id: int
     logical_name: str
     file_id: int
@@ -84,16 +86,9 @@ def _write_meta_pages(pool: BufferPool, fid: int, usable: int, meta_blob: bytes)
             write_header(mframe.data, hdr)
 
 
-def write_sstable_run(
-    storage_manager: StorageManager,
-    pool: BufferPool,
-    run_id: int,
-    logical_name: str,
-    rel_path: str,
-    sorted_items: list[tuple[bytes, OpList]],
-) -> SSTableRun:
-    fid, backend = storage_manager.open_file(logical_name, rel_path)
-    usable = backend.usable_page_size - HEADER_SIZE
+def _pack_sorted_items(
+    pool: BufferPool, fid: int, usable: int, sorted_items: list[tuple[bytes, OpList]]
+) -> tuple[BloomFilter, list[tuple[bytes, int]]]:
     bloom = BloomFilter(num_bits=max(256, len(sorted_items) * BLOOM_BITS_PER_KEY), num_hashes=BLOOM_NUM_HASHES)
     fence: list[tuple[bytes, int]] = []
     cur_entries: list[tuple[bytes, OpList]] = []
@@ -115,7 +110,20 @@ def write_sstable_run(
             for i in range(0, len(ops), max_ops):
                 _flush_page(pool, fid, [(kb, ops[i:i + max_ops])], fence)
     _flush_page(pool, fid, cur_entries, fence)
+    return bloom, fence
 
+
+def write_sstable_run(
+    storage_manager: StorageManager,
+    pool: BufferPool,
+    run_id: int,
+    logical_name: str,
+    rel_path: str,
+    sorted_items: list[tuple[bytes, OpList]],
+) -> SSTableRun:
+    fid, backend = storage_manager.open_file(logical_name, rel_path)
+    usable = backend.usable_page_size - HEADER_SIZE
+    bloom, fence = _pack_sorted_items(pool, fid, usable, sorted_items)
     data_pages = backend.page_count
     meta_blob = _encode_meta(sorted_items[0][0], sorted_items[-1][0], bloom, fence)
     _write_meta_pages(pool, fid, usable, meta_blob)

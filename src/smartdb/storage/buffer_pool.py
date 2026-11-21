@@ -12,6 +12,8 @@ from .backends import PageBackend, StorageManager
 
 @dataclass
 class BufferFrame:
+    """In-memory cached page slot with pin count, dirty flag, and LSN metadata."""
+
     file_id: int
     page_id: int
     data: bytearray
@@ -23,6 +25,8 @@ class BufferFrame:
 
 @dataclass
 class BufferStats:
+    """Cumulative buffer-pool hit, miss, I/O, and eviction counters."""
+
     hits: int = 0
     misses: int = 0
     disk_reads: int = 0
@@ -80,6 +84,10 @@ class BufferPool:
             self._backends[file_id] = backend
             return backend
         raise KeyError(f"Unknown file_id: {file_id}")
+
+    def usable_page_size(self, file_id: int = 0) -> int:
+        """Return usable payload bytes per page for the registered backend."""
+        return self._get_backend(file_id).usable_page_size
 
     def _touch(self, key: tuple[int, int]) -> None:
         if self.policy == "LRU":

@@ -11,7 +11,7 @@ from typing import Any
 from common import environment_metadata, run_repeated, save_bar_chart, write_csv
 from smartdb.core import DEFAULT_BENCH_OUT_DIR, ColumnSpec, DataType, load_settings
 from smartdb.engine import SmartRetailDB
-from smartdb.storage import PAGE_SIZE, BufferPool, PageFile, make_aes_gcm_hooks
+from smartdb.storage import PAGE_SIZE, BufferPool, PageFile, make_aes_gcm_crypto
 
 SCHEMA = [
     ColumnSpec("product_id", DataType.INT, nullable=False),
@@ -104,20 +104,16 @@ def bench_layouts_and_backends(records: int, seed: int, repeats: int) -> list[di
             })
 
     # Page vs Objects vs AES-GCM
-    enc, dec, ovh, rec_enc, rec_dec = make_aes_gcm_hooks(os.urandom(32))
+    crypto = make_aes_gcm_crypto(os.urandom(32))
     configs = [
-        ("page_plain", "page", None, None, 0, None, None),
-        ("objects_plain", "objects", None, None, 0, None, None),
-        ("page_aes_gcm", "page", enc, dec, ovh, rec_enc, rec_dec),
+        ("page_plain", "page", None),
+        ("objects_plain", "objects", None),
+        ("page_aes_gcm", "page", crypto),
     ]
-    for label, bkind, ep, dp, co, er, dr in configs:
+    for label, bkind, cfg_crypto in configs:
         def _insert_once() -> dict[str, Any]:
             with tempfile.TemporaryDirectory() as tmp:
-                db = SmartRetailDB(
-                    tmp, buffer_frames=32, backend_kind=bkind,
-                    encrypt_page=ep, decrypt_page=dp, crypto_overhead=co,
-                    encrypt_record=er, decrypt_record=dr,
-                )
+                db = SmartRetailDB(tmp, buffer_frames=32, backend_kind=bkind, crypto=cfg_crypto)
                 db.create_table("Products", SCHEMA, layout="row")
                 for rec in data[: min(records, 500)]:
                     db.insert("Products", rec)

@@ -1,10 +1,12 @@
 from .backends import (
     PAGE_SIZE,
+    CryptoHooks,
     LocalObjectStore,
     PageBackend,
     PageFile,
     StorageManager,
     TransformingBackend,
+    make_aes_gcm_crypto,
     make_aes_gcm_hooks,
 )
 from .buffer_pool import BufferFrame, BufferPool, BufferStats
@@ -15,7 +17,9 @@ __all__ = [
     "PageBackend",
     "PageFile",
     "LocalObjectStore",
+    "CryptoHooks",
     "TransformingBackend",
+    "make_aes_gcm_crypto",
     "make_aes_gcm_hooks",
     "StorageManager",
     "BufferPool",

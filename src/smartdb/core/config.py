@@ -51,6 +51,8 @@ def load_env(path: str | Path = ".env") -> dict[str, str]:
 
 @dataclass(frozen=True)
 class Settings:
+    """Editable runtime configuration resolved from environment variables and .env."""
+
     db_dir: str = DEFAULT_DB_DIR
     page_size: int = PAGE_SIZE
     buffer_frames: int = DEFAULT_BUFFER_FRAMES
@@ -62,39 +64,32 @@ class Settings:
     bench_repeats: int = DEFAULT_BENCH_REPEATS
 
 
+def _validate_settings(settings: Settings) -> Settings:
+    if settings.page_size < 128 or settings.buffer_frames < 1:
+        raise ValueError("SMARTDB_PAGE_SIZE must be >= 128 and SMARTDB_BUFFER_FRAMES >= 1")
+    if settings.replacement_policy not in {"FIFO", "LRU"}:
+        raise ValueError("SMARTDB_POLICY must be 'FIFO' or 'LRU'")
+    if settings.backend_kind not in {"page", "objects"}:
+        raise ValueError("SMARTDB_BACKEND must be 'page' or 'objects'")
+    if settings.lsm_flush_threshold < 1 or settings.lsm_compaction_threshold < 2:
+        raise ValueError("SMARTDB_LSM_FLUSH_THRESHOLD >= 1 and SMARTDB_LSM_COMPACTION_THRESHOLD >= 2")
+    return settings
+
+
 def load_settings(env_path: str | Path = ".env") -> Settings:
     """Load editable settings (precedence: os.environ > .env file > constants)."""
     file_env = load_env(env_path)
-
-    def get(key: str, default: str) -> str:
-        return os.environ.get(key, file_env.get(key, default))
-
-    page_size = int(get("SMARTDB_PAGE_SIZE", str(PAGE_SIZE)))
-    buffer_frames = int(get("SMARTDB_BUFFER_FRAMES", str(DEFAULT_BUFFER_FRAMES)))
-    policy = get("SMARTDB_POLICY", DEFAULT_REPLACEMENT_POLICY).upper()
-    backend = get("SMARTDB_BACKEND", DEFAULT_BACKEND_KIND).lower()
-    lsm_flush = int(get("SMARTDB_LSM_FLUSH_THRESHOLD", str(LSM_FLUSH_THRESHOLD)))
-    lsm_compact = int(get("SMARTDB_LSM_COMPACTION_THRESHOLD", str(LSM_COMPACTION_THRESHOLD)))
-    seed = int(get("SMARTDB_SEED", str(DEFAULT_SEED)))
-    repeats = int(get("SMARTDB_BENCH_REPEATS", str(DEFAULT_BENCH_REPEATS)))
-
-    if page_size < 128 or buffer_frames < 1:
-        raise ValueError("SMARTDB_PAGE_SIZE must be >= 128 and SMARTDB_BUFFER_FRAMES >= 1")
-    if policy not in {"FIFO", "LRU"}:
-        raise ValueError("SMARTDB_POLICY must be 'FIFO' or 'LRU'")
-    if backend not in {"page", "objects"}:
-        raise ValueError("SMARTDB_BACKEND must be 'page' or 'objects'")
-    if lsm_flush < 1 or lsm_compact < 2:
-        raise ValueError("SMARTDB_LSM_FLUSH_THRESHOLD >= 1 and SMARTDB_LSM_COMPACTION_THRESHOLD >= 2")
-
-    return Settings(
-        db_dir=get("SMARTDB_DIR", DEFAULT_DB_DIR),
-        page_size=page_size,
-        buffer_frames=buffer_frames,
-        replacement_policy=policy,
-        backend_kind=backend,
-        lsm_flush_threshold=lsm_flush,
-        lsm_compaction_threshold=lsm_compact,
-        seed=seed,
-        bench_repeats=repeats,
+    get = lambda k, d: os.environ.get(k, file_env.get(k, d))
+    return _validate_settings(
+        Settings(
+            db_dir=get("SMARTDB_DIR", DEFAULT_DB_DIR),
+            page_size=int(get("SMARTDB_PAGE_SIZE", str(PAGE_SIZE))),
+            buffer_frames=int(get("SMARTDB_BUFFER_FRAMES", str(DEFAULT_BUFFER_FRAMES))),
+            replacement_policy=get("SMARTDB_POLICY", DEFAULT_REPLACEMENT_POLICY).upper(),
+            backend_kind=get("SMARTDB_BACKEND", DEFAULT_BACKEND_KIND).lower(),
+            lsm_flush_threshold=int(get("SMARTDB_LSM_FLUSH_THRESHOLD", str(LSM_FLUSH_THRESHOLD))),
+            lsm_compaction_threshold=int(get("SMARTDB_LSM_COMPACTION_THRESHOLD", str(LSM_COMPACTION_THRESHOLD))),
+            seed=int(get("SMARTDB_SEED", str(DEFAULT_SEED))),
+            bench_repeats=int(get("SMARTDB_BENCH_REPEATS", str(DEFAULT_BENCH_REPEATS))),
+        )
     )

@@ -28,6 +28,8 @@ __all__ = [
 
 @dataclass(frozen=True)
 class ColumnSpec:
+    """Column metadata: name, data type, nullability, and vector dimension."""
+
     name: str
     dtype: DataType = DataType.ANY
     nullable: bool = True

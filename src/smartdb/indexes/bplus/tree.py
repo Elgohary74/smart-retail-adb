@@ -47,10 +47,12 @@ class BPlusTree:
             self._tmp_dir = tempfile.TemporaryDirectory()
             storage_manager = StorageManager(Path(self._tmp_dir.name))
             pool = BufferPool(capacity=32, storage_manager=storage_manager)
-        assert storage_manager is not None and pool is not None
+        if storage_manager is None or pool is None:
+            raise RuntimeError("BPlusTree requires both storage_manager and pool")
         self.storage_manager, self.pool, self.name = storage_manager, pool, name
+        self._logical_name = f"index:{name}:bplus"
         self._file_id, self._backend = storage_manager.open_file(
-            f"index:{name}:bplus", f"indexes/{name.replace(':', '_')}.bplus.pages"
+            self._logical_name, f"indexes/{name.replace(':', '_')}.bplus.pages"
         )
         self._usable = self._backend.usable_page_size - HEADER_SIZE
         self._init_or_load()
@@ -63,7 +65,8 @@ class BPlusTree:
                     self._max_keys = max_k
             return
         meta_pid, _ = self.pool.new_page(file_id=self._file_id)
-        assert meta_pid == 0
+        if meta_pid != 0:
+            raise IOError(f"Expected B+ Tree meta page at 0, got {meta_pid}")
         self.pool.unpin_page(0, is_dirty=True, file_id=self._file_id)
         root_pid, root_frame = self.pool.new_page(file_id=self._file_id)
         write_leaf(root_frame.data, [], next_page=-1, prev_page=-1)
@@ -225,6 +228,11 @@ class BPlusTree:
 
     def flush(self) -> None:
         self.pool.flush_file(self._file_id)
+
+    def destroy(self) -> None:
+        """Unregister B+ Tree pages from the buffer pool and delete backing storage."""
+        self.pool.unregister_file(self._file_id, drop_dirty=True)
+        self.storage_manager.drop_file(self._logical_name)
 
     def close(self) -> None:
         self.flush()

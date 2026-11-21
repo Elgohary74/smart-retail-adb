@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+from typing import Any
+
 from .core import load_settings
 from .engine import SmartRetailDB
 
@@ -19,6 +21,17 @@ def _help() -> str:
     )
 
 
+def _print_result(res: Any) -> None:
+    if isinstance(res, list):
+        for row in res:
+            print(row)
+        print(f"({len(res)} row(s))")
+    elif isinstance(res, int):
+        print(f"({res} row(s) affected)")
+    else:
+        print(res)
+
+
 def _run_line(db: SmartRetailDB, line: str) -> bool:
     low = line.lower()
     if low in {":quit", "quit", "exit", "\\q"}:
@@ -32,15 +45,7 @@ def _run_line(db: SmartRetailDB, line: str) -> bool:
     elif low.startswith(":explain "):
         print(db.explain(line[len(":explain "):]))
     else:
-        res = db.execute(line)
-        if isinstance(res, list):
-            for row in res:
-                print(row)
-            print(f"({len(res)} row(s))")
-        elif isinstance(res, int):
-            print(f"({res} row(s) affected)")
-        else:
-            print(res)
+        _print_result(db.execute(line))
     return True
 
 
@@ -67,7 +72,7 @@ def main() -> None:
             try:
                 if not _run_line(db, line):
                     break
-            except Exception as exc:
+            except (ValueError, TypeError, KeyError, IndexError, OSError) as exc:
                 print(f"ERROR: {type(exc).__name__}: {exc}")
 
 

@@ -14,6 +14,8 @@ _TOMBSTONE_OFFSET = 0xFFFF
 
 
 class PageType(IntEnum):
+    """Physical page kind tags stored in byte 0 of every PageHeader."""
+
     FREE = 0
     ROW_SLOTTED = 1
     OVERFLOW = 2
@@ -30,6 +32,8 @@ class PageType(IntEnum):
 
 @dataclass
 class PageHeader:
+    """24-byte header shared across all page formats."""
+
     page_type: int
     flags: int
     item_count: int

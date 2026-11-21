@@ -14,7 +14,7 @@ from ..core import (
     TableSchema,
     load_settings,
 )
-from ..indexes import IndexManager
+from ..indexes import IndexManager, WorkloadProfile
 from ..query import (
     CreateIndexStmt,
     CreateTableStmt,
@@ -29,11 +29,11 @@ from ..query import (
 from ..storage import (
     BufferPool,
     ColumnTable,
+    CryptoHooks,
     RowTable,
     StorageManager,
     TableStorage,
 )
-from ..storage.backends import PageTransform, RecordTransform
 
 
 class SmartRetailDB:
@@ -45,11 +45,7 @@ class SmartRetailDB:
         buffer_frames: int | None = None,
         replacement_policy: str | None = None,
         backend_kind: str | None = None,
-        encrypt_page: PageTransform | None = None,
-        decrypt_page: PageTransform | None = None,
-        crypto_overhead: int = 0,
-        encrypt_record: RecordTransform | None = None,
-        decrypt_record: RecordTransform | None = None,
+        crypto: CryptoHooks | None = None,
     ):
         settings = load_settings()
         self.directory = Path(directory if directory is not None else settings.db_dir)
@@ -58,9 +54,9 @@ class SmartRetailDB:
         self.replacement_policy = settings.replacement_policy if replacement_policy is None else replacement_policy
         self.backend_kind = settings.backend_kind if backend_kind is None else backend_kind
         self.storage_manager = StorageManager(
-            self.directory, backend_kind=self.backend_kind,
-            encrypt_page=encrypt_page, decrypt_page=decrypt_page, crypto_overhead=crypto_overhead,
-            encrypt_record=encrypt_record, decrypt_record=decrypt_record,
+            self.directory,
+            backend_kind=self.backend_kind,
+            crypto=crypto,
             physical_page_size=settings.page_size,
         )
         self.pool = BufferPool(capacity=self.buffer_frames, policy=self.replacement_policy, storage_manager=self.storage_manager)
@@ -178,11 +174,13 @@ class SmartRetailDB:
             raise TypeError("Cannot build scalar B+/LSM index on VECTOR column")
         stats = self._catalog.table_stats[table_name]
         has_ops = (stats["reads"] + stats["writes"] + stats["range_reads"]) > 0
-        r = (stats["reads"] if has_ops else AUTO_DEFAULT_READS) if reads is None else reads
-        w = (stats["writes"] if has_ops else AUTO_DEFAULT_WRITES) if writes is None else writes
-        rr = (stats["range_reads"] if has_ops else 0) if range_reads is None else range_reads
+        workload = WorkloadProfile(
+            reads=(stats["reads"] if has_ops else AUTO_DEFAULT_READS) if reads is None else reads,
+            writes=(stats["writes"] if has_ops else AUTO_DEFAULT_WRITES) if writes is None else writes,
+            range_reads=(stats["range_reads"] if has_ops else 0) if range_reads is None else range_reads,
+        )
         kind, idx = self.index_manager.create(
-            table_name, field, index_type, key_dtype=col.dtype, reads=r, writes=w, range_reads=rr, replace=True
+            table_name, field, index_type, key_dtype=col.dtype, workload=workload, replace=True
         )
         for rid, rec in table.iter_records(fields=[field]):
             idx.insert(rec[field], rid)

@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from smartdb.core import DEFAULT_BENCH_REPEATS, DEFAULT_BENCH_WARMUP
+
 
 def environment_metadata() -> dict[str, Any]:
     return {
@@ -31,7 +33,11 @@ def summarize_ms(samples_ms: list[float]) -> dict[str, float]:
     }
 
 
-def run_repeated(fn: Callable[[], dict[str, Any]], repeats: int = 5, warmup: int = 1) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def run_repeated(
+    fn: Callable[[], dict[str, Any]],
+    repeats: int = DEFAULT_BENCH_REPEATS,
+    warmup: int = DEFAULT_BENCH_WARMUP,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     for _ in range(warmup):
         fn()
     runs: list[dict[str, Any]] = []

@@ -1,4 +1,4 @@
-"""Linked overflow page chains for records or RID buckets exceeding one page."""
+"""Linked overflow page chains and stub codecs for oversized records/values."""
 from __future__ import annotations
 
 import struct
@@ -6,41 +6,59 @@ from ..buffer_pool import BufferPool
 from .slotted import HEADER_SIZE, PageHeader, PageType, read_header, write_header
 
 _CHUNK_LEN_STRUCT = "<H"
+OVF_MAGIC = b"\xffOVF"
+OVF_STUB_STRUCT = "<4sIi"
+OVF_STUB_SIZE = struct.calcsize(OVF_STUB_STRUCT)
+
+
+def is_overflow_stub(payload: bytes) -> bool:
+    return len(payload) == OVF_STUB_SIZE and payload[:4] == OVF_MAGIC
+
+
+def pack_overflow_stub(total_len: int, first_page_id: int) -> bytes:
+    return struct.pack(OVF_STUB_STRUCT, OVF_MAGIC, total_len, first_page_id)
+
+
+def unpack_overflow_stub(payload: bytes) -> tuple[int, int]:
+    _, total_len, first_page_id = struct.unpack(OVF_STUB_STRUCT, payload)
+    return total_len, first_page_id
+
+
+def _write_chunk_page(pool: BufferPool, file_id: int, prev_pid: int, chunk: bytes) -> int:
+    pid, frame = pool.new_page(file_id=file_id)
+    write_header(
+        frame.data,
+        PageHeader(
+            page_type=int(PageType.OVERFLOW),
+            flags=0,
+            item_count=1,
+            free_start=HEADER_SIZE + 2 + len(chunk),
+            free_end=len(frame.data),
+            next_page=-1,
+            prev_page=prev_pid,
+        ),
+    )
+    struct.pack_into(_CHUNK_LEN_STRUCT, frame.data, HEADER_SIZE, len(chunk))
+    frame.data[HEADER_SIZE + 2:HEADER_SIZE + 2 + len(chunk)] = chunk
+    pool.unpin_page(pid, is_dirty=True, file_id=file_id)
+    if prev_pid != -1:
+        with pool.pin_page(prev_pid, file_id=file_id, dirty=True) as prev_frame:
+            hdr = read_header(prev_frame.data)
+            hdr.next_page = pid
+            write_header(prev_frame.data, hdr)
+    return pid
 
 
 def write_overflow_chain(pool: BufferPool, file_id: int, data: bytes) -> int:
     """Write arbitrary bytes across linked OVERFLOW pages and return first page_id."""
     if not data:
         raise ValueError("Overflow payload must be non-empty")
-    usable = pool._get_backend(file_id).usable_page_size - HEADER_SIZE - 2
-    chunks = [data[i:i + usable] for i in range(0, len(data), usable)]
-    first_pid = -1
-    prev_pid = -1
-    for chunk in chunks:
-        pid, frame = pool.new_page(file_id=file_id)
+    usable = pool.usable_page_size(file_id) - HEADER_SIZE - 2
+    first_pid, prev_pid = -1, -1
+    for i in range(0, len(data), usable):
+        prev_pid = _write_chunk_page(pool, file_id, prev_pid, data[i:i + usable])
         if first_pid == -1:
-            first_pid = pid
-        if prev_pid != -1:
-            with pool.pin_page(prev_pid, file_id=file_id, dirty=True) as prev_frame:
-                hdr = read_header(prev_frame.data)
-                hdr.next_page = pid
-                write_header(prev_frame.data, hdr)
-        write_header(
-            frame.data,
-            PageHeader(
-                page_type=int(PageType.OVERFLOW),
-                flags=0,
-                item_count=1,
-                free_start=HEADER_SIZE + 2 + len(chunk),
-                free_end=len(frame.data),
-                next_page=-1,
-                prev_page=prev_pid,
-            ),
-        )
-        struct.pack_into(_CHUNK_LEN_STRUCT, frame.data, HEADER_SIZE, len(chunk))
-        frame.data[HEADER_SIZE + 2:HEADER_SIZE + 2 + len(chunk)] = chunk
-        pool.unpin_page(pid, is_dirty=True, file_id=file_id)
-        prev_pid = pid
+            first_pid = prev_pid
     return first_pid
 
 

@@ -26,6 +26,8 @@ _RE_CMP = re.compile(rf"^\s*({_ID})\s*(<=|>=|=|<|>)\s*(.+?)\s*$", re.I | re.S)
 
 @dataclass(frozen=True)
 class Predicate:
+    """Single-column WHERE filter predicate."""
+
     field: str
     op: str
     value: Any = None
@@ -34,6 +36,8 @@ class Predicate:
 
 @dataclass(frozen=True)
 class CreateTableStmt:
+    """Parsed CREATE TABLE statement."""
+
     table: str
     columns: list[ColumnSpec]
     layout: str
@@ -41,12 +45,16 @@ class CreateTableStmt:
 
 @dataclass(frozen=True)
 class InsertStmt:
+    """Parsed INSERT INTO ... VALUES statement."""
+
     table: str
     values: list[Any]
 
 
 @dataclass(frozen=True)
 class CreateIndexStmt:
+    """Parsed CREATE INDEX statement."""
+
     table: str
     field: str
     index_type: str
@@ -56,6 +64,8 @@ class CreateIndexStmt:
 
 @dataclass(frozen=True)
 class SelectStmt:
+    """Parsed SELECT statement with optional column projection and WHERE predicate."""
+
     table: str
     columns: list[str] | None
     where: Predicate | None = None
@@ -63,6 +73,8 @@ class SelectStmt:
 
 @dataclass(frozen=True)
 class UpdateStmt:
+    """Parsed UPDATE ... SET statement."""
+
     table: str
     updates: dict[str, Any]
     where: Predicate | None = None
@@ -70,6 +82,8 @@ class UpdateStmt:
 
 @dataclass(frozen=True)
 class DeleteStmt:
+    """Parsed DELETE FROM statement."""
+
     table: str
     where: Predicate | None = None
 
@@ -85,7 +99,7 @@ def _parse_literal(raw: str, allow_vector: bool = False) -> Any:
         val = ast.literal_eval(text)
     except (ValueError, SyntaxError) as exc:
         raise ValueError(f"Invalid literal: {text!r}") from exc
-    if isinstance(val, complex) or val is Ellipsis or isinstance(val, (dict, set)):
+    if isinstance(val, (complex, dict, set)) or val is Ellipsis:
         raise ValueError(f"Unsupported literal: {text!r}")
     if isinstance(val, float) and not math.isfinite(val):
         raise ValueError("Literal float must be finite")
@@ -97,25 +111,26 @@ def _parse_literal(raw: str, allow_vector: bool = False) -> Any:
 
 
 def _split_top_level(text: str) -> list[str]:
-    items, buf, depth, quote, escaped = [], [], 0, None, False
+    items: list[str] = []
+    buf: list[str] = []
+    depth, quote, escaped = 0, None, False
     for ch in text:
+        buf.append(ch)
         if escaped:
-            buf.append(ch); escaped = False; continue
-        if quote is not None:
-            buf.append(ch)
+            escaped = False
+        elif quote is not None:
             escaped = (ch == "\\")
-            if ch == quote and not escaped:
-                quote = None
-            continue
-        if ch in ("'", '"'):
+            quote = None if (ch == quote and not escaped) else quote
+        elif ch in ("'", '"'):
             quote = ch
         elif ch in "([":
             depth += 1
         elif ch in ")]":
             depth -= 1
         elif ch == "," and depth == 0:
-            items.append("".join(buf).strip()); buf = []; continue
-        buf.append(ch)
+            buf.pop()
+            items.append("".join(buf).strip())
+            buf = []
     if tail := "".join(buf).strip():
         items.append(tail)
     return items

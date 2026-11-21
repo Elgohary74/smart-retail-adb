@@ -58,7 +58,8 @@ class LSMTree:
         if self._owns_storage:
             storage_manager = StorageManager(self.directory)
             pool = BufferPool(capacity=32, storage_manager=storage_manager)
-        assert storage_manager is not None and pool is not None
+        if storage_manager is None or pool is None:
+            raise RuntimeError("LSMTree requires both storage_manager and pool")
         self.storage_manager, self.pool = storage_manager, pool
 
         self.manifest_path = self.directory / f"{self.name_prefix}_manifest.json"
@@ -127,21 +128,26 @@ class LSMTree:
     def delete(self, key: Any, rid: RID | None = None) -> None:
         self._record_op(key, rid, True)
 
-    def flush(self) -> None:
-        if not self.memtable:
-            return
+    def _create_run(self, sorted_items: list[tuple[bytes, OpList]]) -> SSTableRun:
         run_id = self._next_run_id
         self._next_run_id += 1
         lname = f"index:{self.name_prefix}:run_{run_id:08d}"
-        run = write_sstable_run(
-            self.storage_manager, self.pool, run_id, lname, self._run_rel_path(run_id),
-            sorted(self.memtable.items(), key=lambda item: item[0]),
+        return write_sstable_run(
+            self.storage_manager, self.pool, run_id, lname, self._run_rel_path(run_id), sorted_items
         )
-        self.runs.append(run)
+
+    def _clear_memtable_and_commit(self) -> None:
         self.memtable.clear()
         self.memtable_entries = 0
         self._save_manifest()
         self._wal.truncate()
+
+    def flush(self) -> None:
+        if not self.memtable:
+            return
+        run = self._create_run(sorted(self.memtable.items(), key=lambda item: item[0]))
+        self.runs.append(run)
+        self._clear_memtable_and_commit()
         self.flushes += 1
         if len(self.runs) >= self.compaction_threshold:
             self.compact()
@@ -166,19 +172,8 @@ class LSMTree:
             self._next_seq += 1
 
         old_runs = list(self.runs)
-        new_runs: list[SSTableRun] = []
-        if final_items:
-            run_id = self._next_run_id
-            self._next_run_id += 1
-            lname = f"index:{self.name_prefix}:run_{run_id:08d}"
-            new_runs.append(
-                write_sstable_run(self.storage_manager, self.pool, run_id, lname, self._run_rel_path(run_id), final_items)
-            )
-        self.runs = new_runs
-        self.memtable.clear()
-        self.memtable_entries = 0
-        self._save_manifest()
-        self._wal.truncate()
+        self.runs = [self._create_run(final_items)] if final_items else []
+        self._clear_memtable_and_commit()
         for old in old_runs:
             self.pool.unregister_file(old.file_id, drop_dirty=True)
             self.storage_manager.drop_file(old.logical_name)
@@ -244,3 +239,11 @@ class LSMTree:
         if self._owns_storage:
             self.pool.close()
             self.storage_manager.close_all()
+
+    def destroy(self) -> None:
+        """Close WAL, unregister all SSTable runs from pool, and delete run files."""
+        self._wal.close()
+        for run in self.runs:
+            self.pool.unregister_file(run.file_id, drop_dirty=True)
+            self.storage_manager.drop_file(run.logical_name)
+        self.runs.clear()

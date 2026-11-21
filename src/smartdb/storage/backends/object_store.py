@@ -8,6 +8,8 @@ from ...core.config import PAGE_SIZE
 
 
 class LocalObjectStore:
+    """Directory-backed page store writing one fixed-size object file per page."""
+
     def __init__(self, directory: str | Path, page_size: int = PAGE_SIZE):
         if page_size <= 0:
             raise ValueError("page_size must be positive")

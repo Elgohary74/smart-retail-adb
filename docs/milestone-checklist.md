@@ -9,7 +9,7 @@
 
 ## M2
 - [x] `LocalObjectStore` backend with cached page count
-- [x] Page-aware `TransformingBackend` encryption hooks + `make_aes_gcm_hooks`
+- [x] Page-aware `TransformingBackend` encryption hooks + `CryptoHooks` / `make_aes_gcm_crypto` (`make_aes_gcm_hooks`)
 - [x] Persistent page-backed `BPlusTree` (equality, range, delete, duplicate RID buckets)
 - [x] Disk-backed SSTable `LSMTree` (Bloom filters, fence pointers, WAL, tombstones, atomic compaction)
 - [x] Workload telemetry & `choose_index_type` heuristic

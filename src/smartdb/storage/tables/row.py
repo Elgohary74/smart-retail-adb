@@ -1,20 +1,27 @@
 """Binary slotted-page RowTable and shared TableStorage protocol."""
 from __future__ import annotations
 
-import struct
 from typing import Any, Callable, Iterator, Protocol
 
 from ...core import RID, TableSchema, deserialize_row, serialize_row
 from ..backends import StorageManager
 from ..buffer_pool import BufferPool
-from ..pages import HEADER_SIZE, PageType, SlottedPage, free_overflow_chain, read_overflow_chain, write_overflow_chain
-
-_OVF_MAGIC = b"\xffOVF"
-_OVF_STUB_STRUCT = "<4sIi"
-_OVF_STUB_SIZE = struct.calcsize(_OVF_STUB_STRUCT)
+from ..pages import (
+    HEADER_SIZE,
+    PageType,
+    SlottedPage,
+    free_overflow_chain,
+    is_overflow_stub,
+    pack_overflow_stub,
+    read_overflow_chain,
+    unpack_overflow_stub,
+    write_overflow_chain,
+)
 
 
 class TableStorage(Protocol):
+    """Shared storage interface implemented by RowTable and ColumnTable."""
+
     schema: TableSchema
 
     def insert(self, record: dict[str, Any]) -> RID: ...
@@ -65,17 +72,17 @@ class RowTable:
         if len(raw) <= self._max_inline:
             return raw
         first_ovf = write_overflow_chain(self.pool, self._ovf_file_id, raw)
-        return struct.pack(_OVF_STUB_STRUCT, _OVF_MAGIC, len(raw), first_ovf)
+        return pack_overflow_stub(len(raw), first_ovf)
 
     def _decode_payload(self, payload: bytes, fields: list[str] | None = None) -> dict[str, Any]:
-        if len(payload) == _OVF_STUB_SIZE and payload[:4] == _OVF_MAGIC:
-            _, total_len, first_ovf = struct.unpack(_OVF_STUB_STRUCT, payload)
+        if is_overflow_stub(payload):
+            total_len, first_ovf = unpack_overflow_stub(payload)
             payload = read_overflow_chain(self.pool, self._ovf_file_id, first_ovf, total_len)
         return deserialize_row(self.schema, payload, projected=fields)
 
     def _free_payload_overflow(self, payload: bytes) -> None:
-        if len(payload) == _OVF_STUB_SIZE and payload[:4] == _OVF_MAGIC:
-            _, _, first_ovf = struct.unpack(_OVF_STUB_STRUCT, payload)
+        if is_overflow_stub(payload):
+            _, first_ovf = unpack_overflow_stub(payload)
             free_overflow_chain(self.pool, self._ovf_file_id, first_ovf)
 
     def insert(self, record: dict[str, Any]) -> RID:
@@ -103,9 +110,7 @@ class RowTable:
             return None
         with self.pool.pin_page(page_id, file_id=self._data_file_id) as frame:
             payload = SlottedPage.get_payload(frame.data, slot_id)
-        if payload is None:
-            return None
-        return self._decode_payload(payload, fields=fields)
+        return None if payload is None else self._decode_payload(payload, fields=fields)
 
     def get_record(self, rid: RID, fields: list[str] | None = None) -> dict[str, Any]:
         rec = self.try_get_record(rid, fields=fields)
@@ -157,11 +162,11 @@ class RowTable:
         fields: list[str] | None = None,
         predicate: Callable[[dict[str, Any]], bool] | None = None,
     ) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for _, rec in self.iter_records(fields=fields if predicate is None else None):
-            if predicate is None or predicate(rec):
-                results.append(rec if fields is None else {f: rec[f] for f in fields})
-        return results
+        return [
+            (rec if fields is None else {f: rec[f] for f in fields})
+            for _, rec in self.iter_records(fields=fields if predicate is None else None)
+            if predicate is None or predicate(rec)
+        ]
 
     def scan_batches(
         self,

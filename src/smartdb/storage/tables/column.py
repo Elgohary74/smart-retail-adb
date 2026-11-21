@@ -5,10 +5,12 @@ import bisect
 import struct
 from typing import Any, Callable, Iterator
 
-from ...core import RID, ColumnSpec, TableSchema, deserialize_value
-from ..backends import StorageManager
+from ..backends import PageBackend, StorageManager
 from ..buffer_pool import BufferPool
+from ..pages import HEADER_SIZE, PageHeader, PageType, SlottedPage, read_header, write_header
+from ...core import RID, TableSchema, deserialize_value
 from .column_codec import (
+    ColumnStream,
     append_fixed,
     append_var,
     decode_var_payload,
@@ -20,7 +22,6 @@ from .column_codec import (
     read_var_slice,
     set_deleted_bit,
 )
-from ..pages import HEADER_SIZE, PageHeader, PageType, SlottedPage, read_header, write_header
 
 
 class ColumnTable:
@@ -42,29 +43,27 @@ class ColumnTable:
         )
         self._bits_per_page = (usable - HEADER_SIZE) * 8
         self._max_var_inline = usable - HEADER_SIZE - 8
-        self._col_fids: dict[str, int] = {}
-        self._col_backends: dict[str, Any] = {}
-        self._fixed_info: dict[str, tuple[int, int, int]] = {}
-        self._var_dirs: dict[str, list[int]] = {}
-        self._init_columns(usable)
+        self._streams: dict[str, ColumnStream] = {
+            col.name: self._open_column_stream(col, usable) for col in schema.columns
+        }
         self._row_count = self._load_row_count()
 
-    def _init_columns(self, usable: int) -> None:
-        for col in self.schema.columns:
-            fid, backend = self.storage_manager.open_file(
-                f"table:{self.name}:col:{col.name}", f"tables/{self.name}.col_{col.name}.pages"
-            )
-            self._col_fids[col.name], self._col_backends[col.name] = fid, backend
-            elem_size = fixed_elem_size(col, usable)
-            if elem_size is not None:
-                spp = fixed_slots_per_page(usable, elem_size)
-                self._fixed_info[col.name] = (elem_size, spp, (spp + 7) // 8)
-            else:
-                starts: list[int] = []
-                for pid in range(backend.page_count):
-                    with self.pool.pin_page(pid, file_id=fid) as frame:
-                        starts.append(read_header(frame.data).prev_page)
-                self._var_dirs[col.name] = starts
+    def _load_var_starts(self, fid: int, backend: PageBackend) -> list[int]:
+        starts: list[int] = []
+        for pid in range(backend.page_count):
+            with self.pool.pin_page(pid, file_id=fid) as frame:
+                starts.append(read_header(frame.data).prev_page)
+        return starts
+
+    def _open_column_stream(self, col, usable: int) -> ColumnStream:
+        fid, backend = self.storage_manager.open_file(
+            f"table:{self.name}:col:{col.name}", f"tables/{self.name}.col_{col.name}.pages"
+        )
+        elem_size = fixed_elem_size(col, usable)
+        if elem_size is not None:
+            spp = fixed_slots_per_page(usable, elem_size)
+            return ColumnStream(col, fid, backend, self._ovf_fid, self._max_var_inline, fixed_spec=(elem_size, spp, (spp + 7) // 8))
+        return ColumnStream(col, fid, backend, self._ovf_fid, self._max_var_inline, var_starts=self._load_var_starts(fid, backend))
 
     def _load_row_count(self) -> int:
         if self._meta_backend.page_count == 0:
@@ -78,49 +77,46 @@ class ColumnTable:
             write_header(frame.data, PageHeader(int(PageType.COL_META), 0, 1, HEADER_SIZE + 8, len(frame.data)))
             struct.pack_into("<Q", frame.data, HEADER_SIZE, count)
             self.pool.unpin_page(pid, is_dirty=True, file_id=self._meta_fid)
-        else:
-            with self.pool.pin_page(0, file_id=self._meta_fid, dirty=True) as frame:
-                struct.pack_into("<Q", frame.data, HEADER_SIZE, count)
+            return
+        with self.pool.pin_page(0, file_id=self._meta_fid, dirty=True) as frame:
+            struct.pack_into("<Q", frame.data, HEADER_SIZE, count)
 
     @property
     def page_count(self) -> int:
-        return sum(b.page_count for b in self._col_backends.values()) + self._del_backend.page_count
+        return sum(s.backend.page_count for s in self._streams.values()) + self._del_backend.page_count
 
     def column_page_count(self, field: str) -> int:
-        return self._col_backends[field].page_count
+        return self._streams[field].backend.page_count
 
     def insert(self, record: dict[str, Any]) -> RID:
         validated = self.schema.validate_record(record)
         rowid = self._row_count
         set_deleted_bit(self.pool, self._del_fid, self._del_backend, self._bits_per_page, rowid, False)
         for col in self.schema.columns:
-            fid, backend = self._col_fids[col.name], self._col_backends[col.name]
-            if col.name in self._fixed_info:
-                append_fixed(self.pool, fid, backend, col, self._fixed_info[col.name], rowid, validated[col.name])
+            stream = self._streams[col.name]
+            if stream.fixed_spec is not None:
+                append_fixed(self.pool, stream, rowid, validated[col.name])
             else:
-                append_var(
-                    self.pool, fid, backend, self._ovf_fid,
-                    self._max_var_inline, self._var_dirs[col.name], col, rowid, validated[col.name],
-                )
+                append_var(self.pool, stream, rowid, validated[col.name])
         self._row_count = rowid + 1
         self._save_row_count(self._row_count)
         return 0, rowid
 
-    def _read_cell(self, col: ColumnSpec, rowid: int) -> Any:
-        fid = self._col_fids[col.name]
-        if col.name in self._fixed_info:
-            elem_size, spp, bmap_len = self._fixed_info[col.name]
-            with self.pool.pin_page(rowid // spp, file_id=fid) as frame:
+    def _read_cell(self, stream: ColumnStream, rowid: int) -> Any:
+        if stream.fixed_spec is not None:
+            elem_size, spp, bmap_len = stream.fixed_spec
+            with self.pool.pin_page(rowid // spp, file_id=stream.file_id) as frame:
                 slot = rowid % spp
                 if frame.data[HEADER_SIZE + (slot // 8)] & (1 << (slot % 8)):
                     return None
-                return deserialize_value(col.dtype, frame.data, HEADER_SIZE + bmap_len + slot * elem_size, col.dim)[0]
-        starts = self._var_dirs[col.name]
-        pid = bisect.bisect_right(starts, rowid) - 1
-        with self.pool.pin_page(pid, file_id=fid) as frame:
-            payload = SlottedPage.get_payload(frame.data, rowid - starts[pid])
-        assert payload is not None
-        return decode_var_payload(self.pool, self._ovf_fid, col, payload)
+                off = HEADER_SIZE + bmap_len + slot * elem_size
+                return deserialize_value(stream.col.dtype, frame.data, off, stream.col.dim)[0]
+        pid = bisect.bisect_right(stream.var_starts, rowid) - 1
+        with self.pool.pin_page(pid, file_id=stream.file_id) as frame:
+            payload = SlottedPage.get_payload(frame.data, rowid - stream.var_starts[pid])
+        if payload is None:
+            raise IOError(f"Corrupt COL_VAR page {pid}: missing slot for rowid {rowid}")
+        return decode_var_payload(self.pool, self._ovf_fid, stream.col, payload)
 
     def try_get_record(self, rid: RID, fields: list[str] | None = None) -> dict[str, Any] | None:
         chunk_id, rowid = int(rid[0]), int(rid[1])
@@ -129,7 +125,7 @@ class ColumnTable:
         if is_deleted_bit(self.pool, self._del_fid, self._del_backend, self._bits_per_page, rowid):
             return None
         cols = [self.schema.column(f) for f in fields] if fields is not None else self.schema.columns
-        return {col.name: self._read_cell(col, rowid) for col in cols}
+        return {col.name: self._read_cell(self._streams[col.name], rowid) for col in cols}
 
     def get_record(self, rid: RID, fields: list[str] | None = None) -> dict[str, Any]:
         rec = self.try_get_record(rid, fields=fields)
@@ -152,13 +148,13 @@ class ColumnTable:
         self.delete(rid)
         return self.insert(merged)
 
-    def _read_column_slice(self, col: ColumnSpec, rowids: list[int]) -> list[Any]:
+    def _read_column_slice(self, col_name: str, rowids: list[int]) -> list[Any]:
         if not rowids:
             return []
-        fid = self._col_fids[col.name]
-        if col.name in self._fixed_info:
-            return read_fixed_slice(self.pool, fid, col, self._fixed_info[col.name], rowids)
-        return read_var_slice(self.pool, fid, self._ovf_fid, col, self._var_dirs[col.name], rowids)
+        stream = self._streams[col_name]
+        if stream.fixed_spec is not None:
+            return read_fixed_slice(self.pool, stream, rowids)
+        return read_var_slice(self.pool, stream, rowids)
 
     def scan_batches(
         self, fields: list[str] | None = None, batch_size: int = 1024
@@ -167,7 +163,7 @@ class ColumnTable:
         for start in range(0, self._row_count, batch_size):
             live = read_live_rowids(self.pool, self._del_fid, self._bits_per_page, start, min(start + batch_size, self._row_count))
             if live:
-                yield {col.name: self._read_column_slice(col, live) for col in cols}
+                yield {col.name: self._read_column_slice(col.name, live) for col in cols}
 
     def iter_records(self, fields: list[str] | None = None) -> Iterator[tuple[RID, dict[str, Any]]]:
         cols = [self.schema.column(f) for f in fields] if fields is not None else self.schema.columns
@@ -175,7 +171,7 @@ class ColumnTable:
             live = read_live_rowids(self.pool, self._del_fid, self._bits_per_page, start, min(start + 1024, self._row_count))
             if not live:
                 continue
-            col_data = {col.name: self._read_column_slice(col, live) for col in cols}
+            col_data = {col.name: self._read_column_slice(col.name, live) for col in cols}
             for i, rowid in enumerate(live):
                 yield (0, rowid), {col.name: col_data[col.name][i] for col in cols}
 
@@ -189,5 +185,5 @@ class ColumnTable:
         ]
 
     def flush(self) -> None:
-        for fid in (self._meta_fid, self._del_fid, self._ovf_fid, *self._col_fids.values()):
+        for fid in (self._meta_fid, self._del_fid, self._ovf_fid, *(s.file_id for s in self._streams.values())):
             self.pool.flush_file(fid)

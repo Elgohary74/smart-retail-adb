@@ -51,27 +51,32 @@ def bucket_read(pool: BufferPool, file_id: int, first_bucket_pid: int) -> list[R
     return out
 
 
+def _clear_bucket_page(buf: bytearray) -> tuple[int, int]:
+    hdr = read_header(buf)
+    removed, nxt = hdr.item_count, hdr.next_page
+    hdr.page_type, hdr.next_page = int(PageType.FREE), -1
+    write_header(buf, hdr)
+    return removed, nxt
+
+
+def _filter_bucket_page(buf: bytearray, target: RID) -> tuple[int, int]:
+    hdr = read_header(buf)
+    kept = [struct.unpack_from(_RID_STRUCT, buf, HEADER_SIZE + i * _RID_SIZE) for i in range(hdr.item_count)]
+    filtered = [r for r in kept if r != target]
+    if len(filtered) != len(kept):
+        hdr.item_count = len(filtered)
+        for i, r in enumerate(filtered):
+            struct.pack_into(_RID_STRUCT, buf, HEADER_SIZE + i * _RID_SIZE, r[0], r[1])
+        write_header(buf, hdr)
+    return len(kept) - len(filtered), hdr.next_page
+
+
 def bucket_remove(pool: BufferPool, file_id: int, first_bucket_pid: int, target: RID | None) -> tuple[int, int]:
     if first_bucket_pid == -1:
         return -1, 0
-    removed = 0
-    cur = first_bucket_pid
+    removed, cur = 0, first_bucket_pid
     while cur != -1:
         with pool.pin_page(cur, file_id=file_id, dirty=True) as frame:
-            hdr = read_header(frame.data)
-            nxt = hdr.next_page
-            if target is None:
-                removed += hdr.item_count
-                hdr.page_type, hdr.next_page = int(PageType.FREE), -1
-                write_header(frame.data, hdr)
-            else:
-                kept = [struct.unpack_from(_RID_STRUCT, frame.data, HEADER_SIZE + i * _RID_SIZE) for i in range(hdr.item_count)]
-                filtered = [r for r in kept if r != target]
-                if len(filtered) != len(kept):
-                    removed += len(kept) - len(filtered)
-                    hdr.item_count = len(filtered)
-                    for i, r in enumerate(filtered):
-                        struct.pack_into(_RID_STRUCT, frame.data, HEADER_SIZE + i * _RID_SIZE, r[0], r[1])
-                    write_header(frame.data, hdr)
-            cur = nxt
+            delta, cur = _clear_bucket_page(frame.data) if target is None else _filter_bucket_page(frame.data, target)
+            removed += delta
     return (-1 if target is None else first_bucket_pid), removed

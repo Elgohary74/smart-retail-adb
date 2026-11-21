@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,15 @@ from ..core import (
 from ..storage import BufferPool, StorageManager
 from .bplus import BPlusTree
 from .lsm import LSMTree
+
+
+@dataclass(frozen=True)
+class WorkloadProfile:
+    """Observed or estimated operation counts used for auto index selection."""
+
+    reads: int = AUTO_DEFAULT_READS
+    writes: int = AUTO_DEFAULT_WRITES
+    range_reads: int = 0
 
 
 def choose_index_type(reads: int, writes: int, range_reads: int = 0) -> str:
@@ -50,31 +60,26 @@ class IndexManager:
         self.indexes: dict[tuple[str, str], tuple[str, BPlusTree | LSMTree]] = {}
 
     def drop(self, table: str, field: str) -> None:
-        key = (table, field)
-        existing = self.indexes.pop(key, None)
+        existing = self.indexes.pop((table, field), None)
         if existing is not None:
-            kind, idx = existing
-            if kind == "BPLUS":
-                assert isinstance(idx, BPlusTree)
-                self.pool.unregister_file(idx._file_id, drop_dirty=True)
-                self.storage_manager.drop_file(f"index:{idx.name}:bplus")
-            else:
-                assert isinstance(idx, LSMTree)
-                if not idx._wal_file.closed:
-                    idx._wal_file.close()
-                for run in idx.runs:
-                    self.pool.unregister_file(run.file_id, drop_dirty=True)
-                    self.storage_manager.drop_file(run.logical_name)
-        # Clean any leftover files on disk for both index types
+            existing[1].destroy()
         safe = f"{table}.{field}".replace(":", "_")
         self.storage_manager.drop_file(f"index:{table}.{field}:bplus")
-        (self.directory / table / field).mkdir(parents=True, exist_ok=True)
         shutil.rmtree(self.directory / table / field, ignore_errors=True)
         bplus_path = self.storage_manager.root / "indexes" / f"{safe}.bplus.pages"
         bplus_path.unlink(missing_ok=True)
-        bplus_obj = bplus_path.with_suffix(bplus_path.suffix + ".objects")
-        if bplus_obj.exists():
-            shutil.rmtree(bplus_obj, ignore_errors=True)
+        shutil.rmtree(bplus_path.with_suffix(bplus_path.suffix + ".objects"), ignore_errors=True)
+
+    @staticmethod
+    def _resolve_kind(index_type: str, workload: WorkloadProfile) -> str:
+        if index_type.lower() == "auto":
+            return choose_index_type(workload.reads, workload.writes, workload.range_reads)
+        kind = index_type.upper()
+        if kind in {"B+TREE", "BPLUS", "BPTREE"}:
+            return "BPLUS"
+        if kind == "LSM":
+            return "LSM"
+        raise ValueError("index_type must be 'auto', 'BPLUS', or 'LSM'")
 
     def create(
         self,
@@ -82,30 +87,16 @@ class IndexManager:
         field: str,
         index_type: str = "auto",
         key_dtype: DataType = DataType.ANY,
-        reads: int = AUTO_DEFAULT_READS,
-        writes: int = AUTO_DEFAULT_WRITES,
-        range_reads: int = 0,
+        workload: WorkloadProfile | None = None,
         replace: bool = True,
     ) -> tuple[str, BPlusTree | LSMTree]:
-        if index_type.lower() == "auto":
-            kind = choose_index_type(reads, writes, range_reads)
-        else:
-            kind = index_type.upper()
-            if kind in {"B+TREE", "BPLUS", "BPTREE"}:
-                kind = "BPLUS"
-            elif kind != "LSM":
-                raise ValueError("index_type must be 'auto', 'BPLUS', or 'LSM'")
-
+        kind = self._resolve_kind(index_type, workload or WorkloadProfile())
         if replace:
             self.drop(table, field)
-
         name = f"{table}.{field}"
         if kind == "BPLUS":
             index: BPlusTree | LSMTree = BPlusTree(
-                storage_manager=self.storage_manager,
-                pool=self.pool,
-                name=name,
-                key_dtype=key_dtype,
+                storage_manager=self.storage_manager, pool=self.pool, name=name, key_dtype=key_dtype
             )
         else:
             index = LSMTree(

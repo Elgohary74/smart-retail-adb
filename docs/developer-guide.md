@@ -39,9 +39,9 @@ src/smartdb/
 │   ├── buffer_pool.py       Shared (file_id, page_id) frame cache (LRU/FIFO)
 │   ├── backends/            PageFile, LocalObjectStore, TransformingBackend, StorageManager
 │   ├── pages/               24-byte PageHeader, SlottedPage, OVERFLOW chains
-│   └── tables/              RowTable, ColumnTable, column_codec
+│   └── tables/              RowTable, ColumnTable, column_codec (ColumnStream)
 ├── indexes/              -> M2 indexing layer
-│   ├── manager.py           IndexManager & choose_index_type
+│   ├── manager.py           IndexManager, WorkloadProfile & choose_index_type
 │   ├── bplus/               Page-backed BPlusTree, node codecs, RID overflow buckets
 │   └── lsm/                 LSMTree, BloomFilter, SSTable writer/reader, LSMWal
 ├── query/                -> SQL parsing & predicate evaluation (M2 -> M3)
@@ -69,7 +69,7 @@ src/smartdb/
 
 ### Run Tests
 ```bash
-# Full suite (36 tests)
+# Full suite (39 tests)
 PYTHONPATH=src python -m unittest discover -s tests -v
 
 # Single test module while iterating

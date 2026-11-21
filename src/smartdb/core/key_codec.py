@@ -11,6 +11,8 @@ _INT64_BOUND = 9223372036854775808.0
 
 
 class DataType(str, Enum):
+    """Supported column and index data types."""
+
     INT = "INT"
     FLOAT = "FLOAT"
     BOOL = "BOOL"

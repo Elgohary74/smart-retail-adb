@@ -1,4 +1,14 @@
-from .overflow import free_overflow_chain, read_overflow_chain, write_overflow_chain
+from .overflow import (
+    OVF_MAGIC,
+    OVF_STUB_SIZE,
+    OVF_STUB_STRUCT,
+    free_overflow_chain,
+    is_overflow_stub,
+    pack_overflow_stub,
+    read_overflow_chain,
+    unpack_overflow_stub,
+    write_overflow_chain,
+)
 from .slotted import HEADER_SIZE, HEADER_STRUCT, PageHeader, PageType, SlottedPage, read_header, write_header
 
 __all__ = [
@@ -9,6 +19,12 @@ __all__ = [
     "SlottedPage",
     "read_header",
     "write_header",
+    "OVF_MAGIC",
+    "OVF_STUB_STRUCT",
+    "OVF_STUB_SIZE",
+    "is_overflow_stub",
+    "pack_overflow_stub",
+    "unpack_overflow_stub",
     "write_overflow_chain",
     "read_overflow_chain",
     "free_overflow_chain",

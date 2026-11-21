@@ -5,7 +5,7 @@ from pathlib import Path
 
 from smartdb.core import DataType
 from smartdb.indexes import BloomFilter, LSMTree
-from smartdb.storage import BufferPool, StorageManager, make_aes_gcm_hooks
+from smartdb.storage import BufferPool, StorageManager, make_aes_gcm_crypto
 
 
 class LSMTreeTests(unittest.TestCase):
@@ -82,16 +82,8 @@ class LSMTreeTests(unittest.TestCase):
 
     def test_lsm_with_object_store_and_aes_gcm(self):
         with tempfile.TemporaryDirectory() as tmp:
-            enc, dec, ovh, rec_enc, rec_dec = make_aes_gcm_hooks(os.urandom(32))
-            mgr = StorageManager(
-                tmp,
-                backend_kind="objects",
-                encrypt_page=enc,
-                decrypt_page=dec,
-                crypto_overhead=ovh,
-                encrypt_record=rec_enc,
-                decrypt_record=rec_dec,
-            )
+            crypto = make_aes_gcm_crypto(os.urandom(32))
+            mgr = StorageManager(tmp, backend_kind="objects", crypto=crypto)
             pool = BufferPool(capacity=16, storage_manager=mgr)
             lsm = LSMTree(tmp, flush_threshold=10, storage_manager=mgr, pool=pool, name_prefix="sec", key_dtype=DataType.STR)
             for i in range(25):
@@ -100,15 +92,7 @@ class LSMTreeTests(unittest.TestCase):
             pool.close()
             mgr.close_all()
 
-            mgr2 = StorageManager(
-                tmp,
-                backend_kind="objects",
-                encrypt_page=enc,
-                decrypt_page=dec,
-                crypto_overhead=ovh,
-                encrypt_record=rec_enc,
-                decrypt_record=rec_dec,
-            )
+            mgr2 = StorageManager(tmp, backend_kind="objects", crypto=crypto)
             pool2 = BufferPool(capacity=16, storage_manager=mgr2)
             lsm2 = LSMTree(tmp, flush_threshold=10, storage_manager=mgr2, pool=pool2, name_prefix="sec", key_dtype=DataType.STR)
             self.assertEqual(lsm2.search("item-12"), [(0, 12)])
