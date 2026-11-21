@@ -12,10 +12,13 @@ from .page_file import PAGE_SIZE
 
 class LocalObjectStore:
     def __init__(self, directory: str | Path, page_size: int = PAGE_SIZE):
+        if page_size <= 0:
+            raise ValueError("page_size must be positive")
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.page_size = page_size
         self._closed = False
+        self._page_count = sum(1 for p in self.directory.glob("page_*.obj") if p.is_file())
 
     def _path(self, page_id: int) -> Path:
         if not isinstance(page_id, int) or isinstance(page_id, bool) or page_id < 0:
@@ -24,14 +27,15 @@ class LocalObjectStore:
 
     @property
     def page_count(self) -> int:
-        return sum(1 for p in self.directory.glob("page_*.obj") if p.is_file())
+        return self._page_count
 
     def allocate_page(self) -> int:
-        page_id = self.page_count
+        page_id = self._page_count
         # Normally objects are contiguous because this implementation never deletes pages.
         while self._path(page_id).exists():
             page_id += 1
         self._path(page_id).write_bytes(b"\x00" * self.page_size)
+        self._page_count = max(self._page_count + 1, page_id + 1)
         return page_id
 
     def read_page(self, page_id: int) -> bytes:
