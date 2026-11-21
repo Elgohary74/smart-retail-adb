@@ -8,14 +8,22 @@ PAGE_SIZE = 4096
 
 
 class PageBackend(Protocol):
-    """Interface shared by normal page files and object-backed pages."""
+    """Interface shared by contiguous page files, object stores, and wrappers."""
+
+    @property
+    def physical_page_size(self) -> int: ...
+
+    @property
+    def usable_page_size(self) -> int: ...
+
+    @property
+    def page_count(self) -> int: ...
 
     def read_page(self, page_id: int) -> bytes: ...
     def write_page(self, page_id: int, data: bytes) -> None: ...
     def allocate_page(self) -> int: ...
-    @property
-    def page_count(self) -> int: ...
     def close(self) -> None: ...
+    def destroy(self) -> None: ...
 
 
 class PageFile:
@@ -32,6 +40,14 @@ class PageFile:
         if self._file.tell() % self.page_size:
             self._file.close()
             raise ValueError(f"File size is not a multiple of page size: {self.path}")
+
+    @property
+    def physical_page_size(self) -> int:
+        return self.page_size
+
+    @property
+    def usable_page_size(self) -> int:
+        return self.page_size
 
     @property
     def page_count(self) -> int:
@@ -73,6 +89,10 @@ class PageFile:
         if not self._file.closed:
             self._file.flush()
             self._file.close()
+
+    def destroy(self) -> None:
+        self.close()
+        self.path.unlink(missing_ok=True)
 
     def __enter__(self) -> "PageFile":
         return self
