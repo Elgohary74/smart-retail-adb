@@ -5,10 +5,10 @@ A small educational DBMS implemented in Python using the course's retail-orders 
 ## What's implemented
 
 ### M1 — Storage engine foundation
-- Persistent fixed-size 4,096-byte pages.
-- Configurable FIFO or LRU buffer pool with dirty-page write-back and counters for hits, misses, reads, writes, evictions, and hit rate.
-- Row-oriented and column-oriented encodings for records in pages.
-- Repeatable benchmark comparing FIFO and LRU with the same deterministic trace.
+- Persistent fixed-size 4,096-byte pages (`PageFile`) behind a `PageBackend` protocol.
+- One shared DB-wide `BufferPool` keyed by `(stream_id, page_id)` with configurable `FIFO`/`LRU` eviction, `pin`/`unpin`, dirty-page write-back, and hit/miss/I/O counters.
+- Separate `RowLayout` (slotted JSON pages with `None` tombstones) and `ColumnLayout` (per-column page streams with projection-only reads and `iter_batches`), plus optional typed columns (`INT`, `FLOAT`, `STR`, `BOOL`).
+- Repeatable multi-suite benchmark (`benchmarks/benchmark_storage.py`) running warm-up + 5 repeats for buffer policies, row vs. column projection scans, point lookups, and storage backends.
 
 ### M2 — Advanced indexing
 - B+ Tree index with leaf links, duplicate-key buckets, point lookup, and range lookup.
@@ -72,23 +72,24 @@ Run each benchmark multiple times and report the median; a single run is not suf
 The index benchmark runs three repetitions by default, checks lookup correctness, and writes per-run and median write/point-lookup results. Override the count with `--repeats`.
 
 ```powershell
-python .\benchmarks\benchmark_storage.py --pages 128 --accesses 10000 --capacity 16 --seed 42
+python .\benchmarks\benchmark_storage.py --pages 128 --accesses 10000 --records 2000 --capacity 16 --repeats 5 --seed 42
 python .\benchmarks\benchmark_indexes.py --records 10000 --seed 42
 ```
 
-CSV results are written to `benchmark_results/`. Keep your Python version, OS, CPU/RAM, seed, page count, buffer capacity, and command line with your final measurements. Timings vary by machine; do not copy example numbers from another system.
+CSV results are written to `benchmark_results/m1_storage.csv` and `benchmark_results/m2_indexes.csv`. Keep your Python version, OS, CPU/RAM, seed, page count, buffer capacity, and command line with your final measurements. Timings vary by machine; do not copy example numbers from another system.
 
 ## Project structure
 
 ```text
 src/smartdb/
-  engine.py                 high-level database API
+  engine.py                 high-level database API (shared BufferPool + catalog)
   cli.py                    interactive command line
   query.py                  restricted safe SELECT parser
-  storage/page_file.py      persistent fixed-size pages
-  storage/buffer_pool.py    FIFO/LRU cache and metrics
-  storage/layouts.py        row/column page encoding
-  storage/table.py          page-backed records and locators
+  storage/page_file.py      PageBackend protocol and contiguous PageFile
+  storage/buffer_pool.py    shared FIFO/LRU cache, pinning, and metrics
+  storage/schema.py         optional typed columns and record validation
+  storage/layouts.py        RowLayout and ColumnLayout managers with projection
+  storage/table.py          StorageTable CRUD, scan, and batch facade
   storage/object_store.py   local object-store adapter
   storage/encryption.py     optional same-length transform hooks
   indexes/bplus_tree.py     B+ Tree
