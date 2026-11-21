@@ -23,9 +23,10 @@ from .config import (
     load_env,
     load_settings,
 )
-from .key_codec import DataType, decode_key, encode_key
+from .key_codec import decode_key, encode_key
 from .row_codec import deserialize_row, deserialize_value, serialize_row, serialize_value
-from .schema import RID, ColumnSpec, TableSchema
+from .schema import ColumnSpec, TableSchema
+from .types import RID, DataType
 
 __all__ = [
     "PAGE_SIZE",

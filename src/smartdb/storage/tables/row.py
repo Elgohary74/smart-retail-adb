@@ -1,7 +1,7 @@
-"""Binary slotted-page RowTable and shared TableStorage protocol."""
+"""Binary slotted-page RowTable with stable (page_id, slot_id) RIDs and overflow."""
 from __future__ import annotations
 
-from typing import Any, Callable, Iterator, Protocol
+from typing import Any, Callable, Iterator
 
 from ...core import RID, TableSchema, deserialize_row, serialize_row
 from ..backends import StorageManager
@@ -17,32 +17,6 @@ from ..pages import (
     unpack_overflow_stub,
     write_overflow_chain,
 )
-
-
-class TableStorage(Protocol):
-    """Shared storage interface implemented by RowTable and ColumnTable."""
-
-    schema: TableSchema
-
-    def insert(self, record: dict[str, Any]) -> RID: ...
-    def get_record(self, rid: RID, fields: list[str] | None = None) -> dict[str, Any]: ...
-    def try_get_record(self, rid: RID, fields: list[str] | None = None) -> dict[str, Any] | None: ...
-    def update(self, rid: RID, updates: dict[str, Any]) -> RID: ...
-    def delete(self, rid: RID) -> bool: ...
-    def iter_records(self, fields: list[str] | None = None) -> Iterator[tuple[RID, dict[str, Any]]]: ...
-    def scan(
-        self,
-        fields: list[str] | None = None,
-        predicate: Callable[[dict[str, Any]], bool] | None = None,
-    ) -> list[dict[str, Any]]: ...
-    def scan_batches(
-        self,
-        fields: list[str] | None = None,
-        batch_size: int = 1024,
-    ) -> Iterator[dict[str, list[Any]]]: ...
-    @property
-    def page_count(self) -> int: ...
-    def flush(self) -> None: ...
 
 
 class RowTable:

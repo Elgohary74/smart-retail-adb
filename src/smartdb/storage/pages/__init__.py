@@ -1,3 +1,4 @@
+from .header import HEADER_SIZE, HEADER_STRUCT, PageHeader, PageType, read_header, write_header
 from .overflow import (
     OVF_MAGIC,
     OVF_STUB_SIZE,
@@ -9,7 +10,7 @@ from .overflow import (
     unpack_overflow_stub,
     write_overflow_chain,
 )
-from .slotted import HEADER_SIZE, HEADER_STRUCT, PageHeader, PageType, SlottedPage, read_header, write_header
+from .slotted import SlottedPage
 
 __all__ = [
     "HEADER_SIZE",

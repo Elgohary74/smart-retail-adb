@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import struct
 from ..buffer_pool import BufferPool
-from .slotted import HEADER_SIZE, PageHeader, PageType, read_header, write_header
+from .header import HEADER_SIZE, PageHeader, PageType, read_header, write_header
 
 _CHUNK_LEN_STRUCT = "<H"
 OVF_MAGIC = b"\xffOVF"

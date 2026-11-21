@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ...core.config import AES_GCM_OVERHEAD_BYTES
-from .page_file import PageBackend
+from .base import PageBackend
 
 PageTransform = Callable[[int, bytes], bytes]
 RecordTransform = Callable[[bytes], bytes]

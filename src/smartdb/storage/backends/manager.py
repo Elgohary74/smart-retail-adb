@@ -4,9 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from ...core.config import DEFAULT_BACKEND_KIND, PAGE_SIZE
+from .base import PageBackend
 from .encryption import CryptoHooks, TransformingBackend
 from .object_store import LocalObjectStore
-from .page_file import PageBackend, PageFile
+from .page_file import PageFile
 
 
 class StorageManager:

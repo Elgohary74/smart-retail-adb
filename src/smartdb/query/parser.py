@@ -4,10 +4,19 @@ from __future__ import annotations
 import ast
 import math
 import re
-from dataclasses import dataclass
 from typing import Any
 
 from ..core.schema import ColumnSpec, DataType
+from .ast import (
+    CreateIndexStmt,
+    CreateTableStmt,
+    DeleteStmt,
+    InsertStmt,
+    Predicate,
+    SelectStmt,
+    SQLStatement,
+    UpdateStmt,
+)
 
 _ID = r"[A-Za-z_][A-Za-z0-9_]*"
 _RE_SELECT = re.compile(rf"^\s*SELECT\s+(\*|{_ID}(?:\s*,\s*{_ID})*)\s+FROM\s+({_ID})(?:\s+WHERE\s+(.+?))?\s*;?\s*$", re.I | re.S)
@@ -22,73 +31,6 @@ _RE_DELETE = re.compile(rf"^\s*DELETE\s+FROM\s+({_ID})(?:\s+WHERE\s+(.+?))?\s*;?
 _RE_BETWEEN = re.compile(rf"^\s*({_ID})\s+BETWEEN\s+(.+?)\s+AND\s+(.+?)\s*$", re.I | re.S)
 _RE_IS_NULL = re.compile(rf"^\s*({_ID})\s+IS\s+(NOT\s+)?NULL\s*$", re.I)
 _RE_CMP = re.compile(rf"^\s*({_ID})\s*(<=|>=|=|<|>)\s*(.+?)\s*$", re.I | re.S)
-
-
-@dataclass(frozen=True)
-class Predicate:
-    """Single-column WHERE filter predicate."""
-
-    field: str
-    op: str
-    value: Any = None
-    high: Any = None
-
-
-@dataclass(frozen=True)
-class CreateTableStmt:
-    """Parsed CREATE TABLE statement."""
-
-    table: str
-    columns: list[ColumnSpec]
-    layout: str
-
-
-@dataclass(frozen=True)
-class InsertStmt:
-    """Parsed INSERT INTO ... VALUES statement."""
-
-    table: str
-    values: list[Any]
-
-
-@dataclass(frozen=True)
-class CreateIndexStmt:
-    """Parsed CREATE INDEX statement."""
-
-    table: str
-    field: str
-    index_type: str
-    reads: int | None = None
-    writes: int | None = None
-
-
-@dataclass(frozen=True)
-class SelectStmt:
-    """Parsed SELECT statement with optional column projection and WHERE predicate."""
-
-    table: str
-    columns: list[str] | None
-    where: Predicate | None = None
-
-
-@dataclass(frozen=True)
-class UpdateStmt:
-    """Parsed UPDATE ... SET statement."""
-
-    table: str
-    updates: dict[str, Any]
-    where: Predicate | None = None
-
-
-@dataclass(frozen=True)
-class DeleteStmt:
-    """Parsed DELETE FROM statement."""
-
-    table: str
-    where: Predicate | None = None
-
-
-SQLStatement = CreateTableStmt | InsertStmt | CreateIndexStmt | SelectStmt | UpdateStmt | DeleteStmt
 
 
 def _parse_literal(raw: str, allow_vector: bool = False) -> Any:

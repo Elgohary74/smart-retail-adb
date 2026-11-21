@@ -2,28 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
 
 from ...core.config import PAGE_SIZE
-
-
-class PageBackend(Protocol):
-    """Interface shared by contiguous page files, object stores, and wrappers."""
-
-    @property
-    def physical_page_size(self) -> int: ...
-
-    @property
-    def usable_page_size(self) -> int: ...
-
-    @property
-    def page_count(self) -> int: ...
-
-    def read_page(self, page_id: int) -> bytes: ...
-    def write_page(self, page_id: int, data: bytes) -> None: ...
-    def allocate_page(self) -> int: ...
-    def close(self) -> None: ...
-    def destroy(self) -> None: ...
 
 
 class PageFile:

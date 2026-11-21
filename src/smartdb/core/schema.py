@@ -5,10 +5,10 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from .key_codec import DataType, decode_key, encode_key
+from .key_codec import decode_key, encode_key
 from .row_codec import deserialize_row, deserialize_value, serialize_row, serialize_value
+from .types import RID, DataType
 
-RID = tuple[int, int]
 _INT64_MIN = -(1 << 63)
 _INT64_MAX = (1 << 63) - 1
 

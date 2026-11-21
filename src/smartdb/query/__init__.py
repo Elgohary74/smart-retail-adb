@@ -1,4 +1,4 @@
-from .parser import (
+from .ast import (
     CreateIndexStmt,
     CreateTableStmt,
     DeleteStmt,
@@ -7,10 +7,8 @@ from .parser import (
     SelectStmt,
     SQLStatement,
     UpdateStmt,
-    parse_select,
-    parse_sql,
-    parse_where,
 )
+from .parser import parse_select, parse_sql, parse_where
 from .predicates import matches_predicate
 
 __all__ = [

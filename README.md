@@ -143,6 +143,7 @@ src/smartdb/
   cli.py                    # Interactive REPL entry point
   core/
     config.py               # Central engine constants & pure-stdlib .env Settings loader
+    types.py                # Shared DataType enum and RID locator alias
     schema.py               # Typed columns, TableSchema, and record validation
     key_codec.py            # Lossless order-preserving key encoding/decoding
     row_codec.py            # Binary value & row serialization with projection skip
@@ -150,20 +151,24 @@ src/smartdb/
     catalog.py              # Atomic catalog.json & indexes.json persistence
     db.py                   # SmartRetailDB coordinator, DML/SELECT execution, reconciliation
   query/
+    ast.py                  # Predicate and SQL DDL/DML/SELECT AST dataclasses
     parser.py               # Restricted safe SQL/DML/DDL parser
     predicates.py           # SQL three-valued predicate evaluation
   storage/
     buffer_pool.py          # Shared multi-file BufferPool (LRU/FIFO, pin/unpin, LSN guard)
     backends/
-      page_file.py          # PageBackend protocol & contiguous PageFile (4,096 B)
+      base.py               # Shared PageBackend protocol
+      page_file.py          # Contiguous PageFile (4,096 B)
       object_store.py       # LocalObjectStore (one .obj file per page, cached count)
-      encryption.py         # TransformingBackend hooks & optional AES-256-GCM helper
+      encryption.py         # CryptoHooks, TransformingBackend & optional AES-256-GCM helper
       manager.py            # StorageManager mapping logical files <-> file_id
     pages/
-      slotted.py            # 24-byte PageHeader, PageType enum, SlottedPage
-      overflow.py           # Linked OVERFLOW page chain reader/writer
+      header.py             # 24-byte PageHeader envelope & PageType enum
+      slotted.py            # Binary SlottedPage slot directory & intra-page compaction
+      overflow.py           # Linked OVERFLOW page chain reader/writer & stub codecs
     tables/
-      row.py                # TableStorage protocol & slotted-page RowTable
+      base.py               # Shared TableStorage protocol
+      row.py                # Slotted-page RowTable with stable RIDs & overflow
       column_codec.py       # Columnar bitmap and fixed/variable page codecs
       column.py             # Per-column ColumnTable (projection pushdown, vectorized batches)
   indexes/

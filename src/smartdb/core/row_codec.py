@@ -4,7 +4,7 @@ from __future__ import annotations
 import struct
 from typing import TYPE_CHECKING, Any
 
-from .key_codec import DataType
+from .types import DataType
 
 if TYPE_CHECKING:
     from .schema import TableSchema

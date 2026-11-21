@@ -8,10 +8,10 @@ Welcome to Smart Retail DB! This guide explains how the codebase is organized, *
 
 If you are opening the codebase for the first time, read the modules **bottom-up** in this order (~20 minutes total):
 
-1. **Data Types & Binary Records** — [src/smartdb/core/schema.py](../src/smartdb/core/schema.py)
-   - Understand `DataType`, `ColumnSpec`, `TableSchema`, and `RID = tuple[int, int]`.
+1. **Data Types & Binary Records** — [src/smartdb/core/types.py](../src/smartdb/core/types.py) & [src/smartdb/core/schema.py](../src/smartdb/core/schema.py)
+   - Understand `DataType`, `RID`, `ColumnSpec`, and `TableSchema`.
    - Skim [key_codec.py](../src/smartdb/core/key_codec.py) (order-preserving index keys) and [row_codec.py](../src/smartdb/core/row_codec.py) (binary row encoding with null bitmaps).
-2. **Physical Pages & Buffer Pool** — [src/smartdb/storage/backends/page_file.py](../src/smartdb/storage/backends/page_file.py) & [src/smartdb/storage/buffer_pool.py](../src/smartdb/storage/buffer_pool.py)
+2. **Physical Pages & Buffer Pool** — [src/smartdb/storage/backends/base.py](../src/smartdb/storage/backends/base.py), [page_file.py](../src/smartdb/storage/backends/page_file.py) & [src/smartdb/storage/buffer_pool.py](../src/smartdb/storage/buffer_pool.py)
    - See the `PageBackend` protocol implemented by `PageFile`, `LocalObjectStore`, and `TransformingBackend`.
    - Read `BufferPool.fetch_page`, `new_page`, `pin_page`, and `_evict_if_needed` to see how `(file_id, page_id)` frames work.
 3. **Table Storage Engines** — [src/smartdb/storage/tables/row.py](../src/smartdb/storage/tables/row.py) & [src/smartdb/storage/tables/column.py](../src/smartdb/storage/tables/column.py)
@@ -30,22 +30,24 @@ If you are opening the codebase for the first time, read the modules **bottom-up
 ```text
 src/smartdb/
 ├── cli.py                -> REPL entry point (`python -m smartdb.cli`)
-├── core/                 -> Constants, .env settings, schemas, key & row serialization
+├── core/                 -> Constants, .env settings, core types, schemas, key & row serialization
 │   ├── config.py            Public: PAGE_SIZE, defaults, Settings, load_settings
-│   ├── schema.py            Public: DataType, ColumnSpec, TableSchema, RID
+│   ├── types.py             Public: DataType, RID
+│   ├── schema.py            Public: ColumnSpec, TableSchema
 │   ├── key_codec.py         Internal/Core: encode_key, decode_key
 │   └── row_codec.py         Internal/Core: serialize_row, deserialize_row
 ├── storage/              -> M1 + M2 storage engine
 │   ├── buffer_pool.py       Shared (file_id, page_id) frame cache (LRU/FIFO)
-│   ├── backends/            PageFile, LocalObjectStore, TransformingBackend, StorageManager
-│   ├── pages/               24-byte PageHeader, SlottedPage, OVERFLOW chains
-│   └── tables/              RowTable, ColumnTable, column_codec (ColumnStream)
+│   ├── backends/            PageBackend (base.py), PageFile, LocalObjectStore, TransformingBackend, StorageManager
+│   ├── pages/               24-byte PageHeader (header.py), SlottedPage, OVERFLOW chains
+│   └── tables/              TableStorage (base.py), RowTable, ColumnTable, column_codec (ColumnStream)
 ├── indexes/              -> M2 indexing layer
 │   ├── manager.py           IndexManager, WorkloadProfile & choose_index_type
 │   ├── bplus/               Page-backed BPlusTree, node codecs, RID overflow buckets
 │   └── lsm/                 LSMTree, BloomFilter, SSTable writer/reader, LSMWal
-├── query/                -> SQL parsing & predicate evaluation (M2 -> M3)
-│   ├── parser.py            parse_sql, parse_select, AST statement dataclasses
+├── query/                -> SQL AST, parsing & predicate evaluation (M2 -> M3)
+│   ├── ast.py               Predicate & DDL/DML/SELECT AST dataclasses
+│   ├── parser.py            parse_sql, parse_select, parse_where
 │   └── predicates.py        matches_predicate (SQL three-valued NULL logic)
 └── engine/               -> Database coordinator (M1-M6)
     ├── db.py                SmartRetailDB
