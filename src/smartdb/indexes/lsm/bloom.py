@@ -4,11 +4,13 @@ from __future__ import annotations
 import hashlib
 import struct
 
+from ...core.config import BLOOM_DEFAULT_BITS, BLOOM_NUM_HASHES
+
 
 class BloomFilter:
     """Bitset Bloom filter for fast negative SSTable pruning."""
 
-    def __init__(self, num_bits: int = 1024, num_hashes: int = 7, bits: bytearray | None = None):
+    def __init__(self, num_bits: int = BLOOM_DEFAULT_BITS, num_hashes: int = BLOOM_NUM_HASHES, bits: bytearray | None = None):
         self.num_bits = max(64, num_bits)
         self.num_hashes = max(1, num_hashes)
         self.bits = bits if bits is not None else bytearray((self.num_bits + 7) // 8)

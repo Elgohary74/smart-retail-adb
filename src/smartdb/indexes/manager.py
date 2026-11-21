@@ -5,7 +5,15 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from ..core import RID, DataType
+from ..core import (
+    AUTO_DEFAULT_READS,
+    AUTO_DEFAULT_WRITES,
+    AUTO_WRITE_RATIO,
+    LSM_COMPACTION_THRESHOLD,
+    LSM_FLUSH_THRESHOLD,
+    RID,
+    DataType,
+)
 from ..storage import BufferPool, StorageManager
 from .bplus import BPlusTree
 from .lsm import LSMTree
@@ -19,17 +27,26 @@ def choose_index_type(reads: int, writes: int, range_reads: int = 0) -> str:
         return "BPLUS"
     if reads == 0 and range_reads == 0:
         return "LSM"
-    return "LSM" if writes > reads * 2 and range_reads == 0 else "BPLUS"
+    return "LSM" if writes > reads * AUTO_WRITE_RATIO and range_reads == 0 else "BPLUS"
 
 
 class IndexManager:
     """Manages page-backed B+ Tree and SSTable LSM Tree indexes."""
 
-    def __init__(self, directory: str | Path, storage_manager: StorageManager, pool: BufferPool):
+    def __init__(
+        self,
+        directory: str | Path,
+        storage_manager: StorageManager,
+        pool: BufferPool,
+        lsm_flush_threshold: int = LSM_FLUSH_THRESHOLD,
+        lsm_compaction_threshold: int = LSM_COMPACTION_THRESHOLD,
+    ):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.storage_manager = storage_manager
         self.pool = pool
+        self.lsm_flush_threshold = lsm_flush_threshold
+        self.lsm_compaction_threshold = lsm_compaction_threshold
         self.indexes: dict[tuple[str, str], tuple[str, BPlusTree | LSMTree]] = {}
 
     def drop(self, table: str, field: str) -> None:
@@ -65,8 +82,8 @@ class IndexManager:
         field: str,
         index_type: str = "auto",
         key_dtype: DataType = DataType.ANY,
-        reads: int = 100,
-        writes: int = 10,
+        reads: int = AUTO_DEFAULT_READS,
+        writes: int = AUTO_DEFAULT_WRITES,
         range_reads: int = 0,
         replace: bool = True,
     ) -> tuple[str, BPlusTree | LSMTree]:
@@ -93,6 +110,8 @@ class IndexManager:
         else:
             index = LSMTree(
                 self.directory / table / field,
+                flush_threshold=self.lsm_flush_threshold,
+                compaction_threshold=self.lsm_compaction_threshold,
                 storage_manager=self.storage_manager,
                 pool=self.pool,
                 name_prefix=name,

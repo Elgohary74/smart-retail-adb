@@ -7,7 +7,14 @@ from bisect import bisect_left, bisect_right
 from pathlib import Path
 from typing import Any
 
-from ...core import RID, DataType, decode_key, encode_key
+from ...core import (
+    LSM_COMPACTION_THRESHOLD,
+    LSM_FLUSH_THRESHOLD,
+    RID,
+    DataType,
+    decode_key,
+    encode_key,
+)
 from ...storage import BufferPool, StorageManager
 from .bloom import BloomFilter
 from .wal import LSMWal
@@ -32,8 +39,8 @@ class LSMTree:
     def __init__(
         self,
         directory: str | Path,
-        flush_threshold: int = 128,
-        compaction_threshold: int = 4,
+        flush_threshold: int = LSM_FLUSH_THRESHOLD,
+        compaction_threshold: int = LSM_COMPACTION_THRESHOLD,
         storage_manager: StorageManager | None = None,
         pool: BufferPool | None = None,
         name_prefix: str = "lsm",

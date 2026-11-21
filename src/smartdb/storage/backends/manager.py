@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+
+from ...core.config import DEFAULT_BACKEND_KIND, PAGE_SIZE
 from .encryption import PageTransform, RecordTransform, TransformingBackend
 from .object_store import LocalObjectStore
-from .page_file import PAGE_SIZE, PageBackend, PageFile
+from .page_file import PageBackend, PageFile
 
 
 class StorageManager:
@@ -13,7 +15,7 @@ class StorageManager:
     def __init__(
         self,
         root: str | Path,
-        backend_kind: str = "page",
+        backend_kind: str = DEFAULT_BACKEND_KIND,
         encrypt_page: PageTransform | None = None,
         decrypt_page: PageTransform | None = None,
         crypto_overhead: int = 0,

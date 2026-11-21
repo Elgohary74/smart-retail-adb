@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable, Iterator
 
+from ..core.config import DEFAULT_BUFFER_FRAMES, DEFAULT_REPLACEMENT_POLICY
 from .backends import PageBackend, StorageManager
 
 
@@ -41,8 +42,8 @@ class BufferPool:
     def __init__(
         self,
         backend: PageBackend | None = None,
-        capacity: int = 64,
-        policy: str = "LRU",
+        capacity: int = DEFAULT_BUFFER_FRAMES,
+        policy: str = DEFAULT_REPLACEMENT_POLICY,
         storage_manager: StorageManager | None = None,
         wal_flushed_lsn_fn: Callable[[], int] | None = None,
     ):

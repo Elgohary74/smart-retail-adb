@@ -6,7 +6,7 @@ from bisect import bisect_left, bisect_right
 from pathlib import Path
 from typing import Any
 
-from ...core import RID, DataType, decode_key, encode_key
+from ...core import BPLUS_INLINE_RID_CAP, RID, DataType, decode_key, encode_key
 from ...storage import BufferPool, StorageManager
 from ...storage.pages import HEADER_SIZE, PageType, read_header, write_header
 from .pages import (
@@ -22,7 +22,7 @@ from .pages import (
 )
 from .buckets import bucket_append, bucket_read, bucket_remove
 
-_INLINE_RID_CAP = 8
+_INLINE_RID_CAP = BPLUS_INLINE_RID_CAP
 
 
 class BPlusTree:

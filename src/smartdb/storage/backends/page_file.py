@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-PAGE_SIZE = 4096
+from ...core.config import PAGE_SIZE
 
 
 class PageBackend(Protocol):

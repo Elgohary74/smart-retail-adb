@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from common import environment_metadata, run_repeated, save_bar_chart, write_csv
-from smartdb.core import ColumnSpec, DataType
+from smartdb.core import DEFAULT_BENCH_OUT_DIR, ColumnSpec, DataType, load_settings
 from smartdb.engine import SmartRetailDB
 
 SCHEMA = [
@@ -114,13 +114,14 @@ def bench_workloads(records: int, ops: int, seed: int, repeats: int) -> list[dic
 
 
 def main() -> None:
+    settings = load_settings()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--records", type=int, default=2000)
     parser.add_argument("--queries", type=int, default=200)
     parser.add_argument("--ops", type=int, default=400)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--repeats", type=int, default=5)
-    parser.add_argument("--out", type=Path, default=Path("benchmark_results/m2_indexes.csv"))
+    parser.add_argument("--seed", type=int, default=settings.seed)
+    parser.add_argument("--repeats", type=int, default=settings.bench_repeats)
+    parser.add_argument("--out", type=Path, default=Path(DEFAULT_BENCH_OUT_DIR) / "m2_indexes.csv")
     parser.add_argument("--plots", action="store_true")
     args = parser.parse_args()
 

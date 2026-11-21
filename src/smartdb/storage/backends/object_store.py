@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from .page_file import PAGE_SIZE
+
+from ...core.config import PAGE_SIZE
 
 
 class LocalObjectStore:

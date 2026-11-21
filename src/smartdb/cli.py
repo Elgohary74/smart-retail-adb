@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from .core import load_settings
 from .engine import SmartRetailDB
 
 
@@ -44,11 +45,12 @@ def _run_line(db: SmartRetailDB, line: str) -> bool:
 
 
 def main() -> None:
+    settings = load_settings()
     parser = argparse.ArgumentParser(description="Smart Retail DB CLI")
-    parser.add_argument("--db", default="./retail_data", help="Database directory")
-    parser.add_argument("--buffer-frames", type=int, default=64)
-    parser.add_argument("--policy", choices=["FIFO", "LRU"], default="LRU")
-    parser.add_argument("--backend", choices=["page", "objects"], default="page")
+    parser.add_argument("--db", default=settings.db_dir, help="Database directory")
+    parser.add_argument("--buffer-frames", type=int, default=settings.buffer_frames)
+    parser.add_argument("--policy", choices=["FIFO", "LRU"], default=settings.replacement_policy)
+    parser.add_argument("--backend", choices=["page", "objects"], default=settings.backend_kind)
     args = parser.parse_args()
     with SmartRetailDB(
         args.db, buffer_frames=args.buffer_frames, replacement_policy=args.policy, backend_kind=args.backend

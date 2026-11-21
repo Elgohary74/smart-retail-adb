@@ -30,7 +30,8 @@ If you are opening the codebase for the first time, read the modules **bottom-up
 ```text
 src/smartdb/
 ├── cli.py                -> REPL entry point (`python -m smartdb.cli`)
-├── core/                 -> Schemas, types, key & row binary serialization
+├── core/                 -> Constants, .env settings, schemas, key & row serialization
+│   ├── config.py            Public: PAGE_SIZE, defaults, Settings, load_settings
 │   ├── schema.py            Public: DataType, ColumnSpec, TableSchema, RID
 │   ├── key_codec.py         Internal/Core: encode_key, decode_key
 │   └── row_codec.py         Internal/Core: serialize_row, deserialize_row

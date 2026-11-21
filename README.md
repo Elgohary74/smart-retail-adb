@@ -55,6 +55,10 @@ python -m unittest discover -s tests -v
 
 *(If `setuptools` is installed in your environment, `pip install -e .` also registers the `smartdb` console entry point.)*
 
+### Configuration (`.env`)
+
+All immutable engine constants and editable runtime defaults live in [src/smartdb/core/config.py](src/smartdb/core/config.py). Copy [.env.example](.env.example) to `.env` to override defaults (`SMARTDB_DIR`, `SMARTDB_PAGE_SIZE`, `SMARTDB_BUFFER_FRAMES`, `SMARTDB_POLICY`, `SMARTDB_BACKEND`, `SMARTDB_LSM_FLUSH_THRESHOLD`, `SMARTDB_LSM_COMPACTION_THRESHOLD`, `SMARTDB_SEED`, `SMARTDB_BENCH_REPEATS`) without editing code; OS environment variables and CLI flags take precedence over `.env`.
+
 ---
 
 ## Interactive CLI & Supported SQL
@@ -138,6 +142,7 @@ PYTHONPATH=src python benchmarks/benchmark_indexes.py --records 2000 --repeats 5
 src/smartdb/
   cli.py                    # Interactive REPL entry point
   core/
+    config.py               # Central engine constants & pure-stdlib .env Settings loader
     schema.py               # Typed columns, TableSchema, and record validation
     key_codec.py            # Lossless order-preserving key encoding/decoding
     row_codec.py            # Binary value & row serialization with projection skip

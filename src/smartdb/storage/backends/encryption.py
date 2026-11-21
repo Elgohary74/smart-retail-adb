@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 from typing import Callable
+
+from ...core.config import AES_GCM_OVERHEAD_BYTES
 from .page_file import PageBackend
 
 PageTransform = Callable[[int, bytes], bytes]
@@ -81,7 +83,7 @@ def make_aes_gcm_hooks(
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     aes = AESGCM(key)
-    overhead = 28  # 12B nonce + 16B tag
+    overhead = AES_GCM_OVERHEAD_BYTES
 
     def page_encrypt(page_id: int, plaintext: bytes) -> bytes:
         nonce = os.urandom(12)

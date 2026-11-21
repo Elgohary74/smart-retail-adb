@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from common import environment_metadata, run_repeated, save_bar_chart, write_csv
-from smartdb.core import ColumnSpec, DataType
+from smartdb.core import DEFAULT_BENCH_OUT_DIR, ColumnSpec, DataType, load_settings
 from smartdb.engine import SmartRetailDB
 from smartdb.storage import PAGE_SIZE, BufferPool, PageFile, make_aes_gcm_hooks
 
@@ -139,14 +139,15 @@ def bench_layouts_and_backends(records: int, seed: int, repeats: int) -> list[di
 
 
 def main() -> None:
+    settings = load_settings()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pages", type=int, default=128)
     parser.add_argument("--accesses", type=int, default=10000)
     parser.add_argument("--capacity", type=int, default=16)
     parser.add_argument("--records", type=int, default=2000)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--repeats", type=int, default=5)
-    parser.add_argument("--out", type=Path, default=Path("benchmark_results/m1_storage.csv"))
+    parser.add_argument("--seed", type=int, default=settings.seed)
+    parser.add_argument("--repeats", type=int, default=settings.bench_repeats)
+    parser.add_argument("--out", type=Path, default=Path(DEFAULT_BENCH_OUT_DIR) / "m1_storage.csv")
     parser.add_argument("--plots", action="store_true")
     args = parser.parse_args()
 

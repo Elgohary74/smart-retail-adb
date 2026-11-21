@@ -5,7 +5,15 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import CatalogStore
-from ..core import RID, ColumnSpec, DataType, TableSchema
+from ..core import (
+    AUTO_DEFAULT_READS,
+    AUTO_DEFAULT_WRITES,
+    RID,
+    ColumnSpec,
+    DataType,
+    TableSchema,
+    load_settings,
+)
 from ..indexes import IndexManager
 from ..query import (
     CreateIndexStmt,
@@ -33,28 +41,36 @@ class SmartRetailDB:
 
     def __init__(
         self,
-        directory: str | Path,
-        buffer_frames: int = 64,
-        replacement_policy: str = "LRU",
-        backend_kind: str = "page",
+        directory: str | Path | None = None,
+        buffer_frames: int | None = None,
+        replacement_policy: str | None = None,
+        backend_kind: str | None = None,
         encrypt_page: PageTransform | None = None,
         decrypt_page: PageTransform | None = None,
         crypto_overhead: int = 0,
         encrypt_record: RecordTransform | None = None,
         decrypt_record: RecordTransform | None = None,
     ):
-        self.directory = Path(directory)
+        settings = load_settings()
+        self.directory = Path(directory if directory is not None else settings.db_dir)
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.buffer_frames, self.replacement_policy, self.backend_kind = (
-            buffer_frames, replacement_policy, backend_kind
-        )
+        self.buffer_frames = settings.buffer_frames if buffer_frames is None else buffer_frames
+        self.replacement_policy = settings.replacement_policy if replacement_policy is None else replacement_policy
+        self.backend_kind = settings.backend_kind if backend_kind is None else backend_kind
         self.storage_manager = StorageManager(
-            self.directory, backend_kind=backend_kind,
+            self.directory, backend_kind=self.backend_kind,
             encrypt_page=encrypt_page, decrypt_page=decrypt_page, crypto_overhead=crypto_overhead,
             encrypt_record=encrypt_record, decrypt_record=decrypt_record,
+            physical_page_size=settings.page_size,
         )
-        self.pool = BufferPool(capacity=buffer_frames, policy=replacement_policy, storage_manager=self.storage_manager)
-        self.index_manager = IndexManager(self.directory / "index_data", self.storage_manager, self.pool)
+        self.pool = BufferPool(capacity=self.buffer_frames, policy=self.replacement_policy, storage_manager=self.storage_manager)
+        self.index_manager = IndexManager(
+            self.directory / "index_data",
+            self.storage_manager,
+            self.pool,
+            lsm_flush_threshold=settings.lsm_flush_threshold,
+            lsm_compaction_threshold=settings.lsm_compaction_threshold,
+        )
         self._catalog = CatalogStore(self.directory)
         self.schemas = self._catalog.schemas
         self.tables: dict[str, TableStorage] = {}
@@ -162,8 +178,8 @@ class SmartRetailDB:
             raise TypeError("Cannot build scalar B+/LSM index on VECTOR column")
         stats = self._catalog.table_stats[table_name]
         has_ops = (stats["reads"] + stats["writes"] + stats["range_reads"]) > 0
-        r = (stats["reads"] if has_ops else 100) if reads is None else reads
-        w = (stats["writes"] if has_ops else 10) if writes is None else writes
+        r = (stats["reads"] if has_ops else AUTO_DEFAULT_READS) if reads is None else reads
+        w = (stats["writes"] if has_ops else AUTO_DEFAULT_WRITES) if writes is None else writes
         rr = (stats["range_reads"] if has_ops else 0) if range_reads is None else range_reads
         kind, idx = self.index_manager.create(
             table_name, field, index_type, key_dtype=col.dtype, reads=r, writes=w, range_reads=rr, replace=True

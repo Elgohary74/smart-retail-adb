@@ -4,7 +4,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
-from ...core import RID
+from ...core import BLOOM_BITS_PER_KEY, BLOOM_NUM_HASHES, RID
 from ...storage import BufferPool, StorageManager
 from ...storage.pages import HEADER_SIZE, PageHeader, PageType, read_header, write_header
 from .bloom import BloomFilter
@@ -94,7 +94,7 @@ def write_sstable_run(
 ) -> SSTableRun:
     fid, backend = storage_manager.open_file(logical_name, rel_path)
     usable = backend.usable_page_size - HEADER_SIZE
-    bloom = BloomFilter(num_bits=max(256, len(sorted_items) * 10), num_hashes=7)
+    bloom = BloomFilter(num_bits=max(256, len(sorted_items) * BLOOM_BITS_PER_KEY), num_hashes=BLOOM_NUM_HASHES)
     fence: list[tuple[bytes, int]] = []
     cur_entries: list[tuple[bytes, OpList]] = []
     cur_size = 0

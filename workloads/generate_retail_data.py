@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from smartdb.core import ColumnSpec, DataType
+from smartdb.core import DEFAULT_LAYOUT, ColumnSpec, DataType, load_settings
 from smartdb.engine import SmartRetailDB
 
 PRODUCT_SCHEMA = [
@@ -185,14 +185,15 @@ def generate(
 
 
 def main() -> None:
+    settings = load_settings()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, default=Path("./retail_data"))
+    parser.add_argument("--db", type=Path, default=Path(settings.db_dir))
     parser.add_argument("--products", type=_non_negative_int, default=10_000)
     parser.add_argument("--customers", type=_non_negative_int, default=1_000)
     parser.add_argument("--orders", type=_non_negative_int, default=5_000)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--backend", choices=["page", "objects"], default="page")
-    parser.add_argument("--layout", choices=["row", "column"], default="row")
+    parser.add_argument("--seed", type=int, default=settings.seed)
+    parser.add_argument("--backend", choices=["page", "objects"], default=settings.backend_kind)
+    parser.add_argument("--layout", choices=["row", "column"], default=DEFAULT_LAYOUT)
     args = parser.parse_args()
     generate(args.db, args.products, args.customers, args.orders, args.seed, args.backend, args.layout)
 
