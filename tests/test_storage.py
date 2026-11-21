@@ -13,6 +13,7 @@ from smartdb.storage.layouts import (
 from smartdb.storage.object_store import LocalObjectStore
 from smartdb.storage.encryption import TransformingBackend
 from smartdb.storage.schema import Column, TableSchema
+from smartdb.storage.table import StorageTable
 
 
 class PageFileTests(unittest.TestCase):
@@ -322,6 +323,39 @@ class PageFileTests(unittest.TestCase):
             self.assertEqual(len(full_rows), 59)
             self.assertLess(proj_reads, full_reads)
             proj_pool.close()
+
+    def test_storage_table_persists_row_and_column_across_backends(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            schema = [("id", "INT", False), ("name", "STR", False), ("price", "FLOAT", True)]
+            for layout in ("row", "column"):
+                for backend_kind in ("page", "objects"):
+                    table_path = Path(tmp) / f"{layout}_{backend_kind}" / "Products.pages"
+                    table = StorageTable(
+                        table_path,
+                        fields=schema,
+                        layout=layout,
+                        buffer_frames=4,
+                        replacement_policy="LRU",
+                        backend_kind=backend_kind,
+                    )
+                    loc0 = table.insert({"id": 1, "name": "Keyboard", "price": 29.99})
+                    loc1 = table.insert({"id": 2, "name": "Mouse", "price": 15.50})
+                    table.update(loc1, {"id": 2, "name": "Gaming Mouse", "price": 25.00})
+                    table.delete(loc0)
+                    table.close()
+
+                    reopened = StorageTable(
+                        table_path,
+                        fields=schema,
+                        layout=layout,
+                        buffer_frames=4,
+                        replacement_policy="LRU",
+                        backend_kind=backend_kind,
+                    )
+                    rows = reopened.scan(columns=["id", "name"])
+                    self.assertEqual(rows, [{"id": 2, "name": "Gaming Mouse"}])
+                    self.assertEqual(reopened.scan(field="id", value=2), [{"id": 2, "name": "Gaming Mouse", "price": 25.0}])
+                    reopened.close()
 
 
 if __name__ == "__main__":

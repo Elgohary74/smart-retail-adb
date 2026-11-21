@@ -4,6 +4,7 @@ import argparse
 import ast
 import re
 from .engine import SmartRetailDB
+from .storage.schema import ColumnSpec, VALID_DTYPES
 
 _CREATE_TABLE = re.compile(
     r"^CREATE\s+TABLE\s+(\w+)\s*\((.*?)\)\s*(?:LAYOUT\s+(ROW|COLUMN))?\s*;?$",
@@ -14,6 +15,31 @@ _CREATE_INDEX = re.compile(
     r"^CREATE\s+INDEX\s+ON\s+(\w+)\s*\(\s*(\w+)\s*\)\s+USING\s+(AUTO|BPLUS|LSM)"
     r"(?:\s+READS\s+(\d+)\s+WRITES\s+(\d+))?\s*;?$", re.IGNORECASE,
 )
+
+
+def _parse_create_fields(fields_text: str) -> list[ColumnSpec]:
+    items = [item.strip() for item in fields_text.split(",") if item.strip()]
+    if not items:
+        raise ValueError("CREATE TABLE requires at least one column")
+    parsed: list[ColumnSpec] = []
+    has_typed = False
+    for item in items:
+        tokens = item.split()
+        if len(tokens) == 1:
+            parsed.append(tokens[0])
+            continue
+        has_typed = True
+        name = tokens[0]
+        dtype = tokens[1].upper()
+        if dtype not in VALID_DTYPES:
+            raise ValueError(f"Unsupported column type {tokens[1]!r}")
+        rest = " ".join(t.upper() for t in tokens[2:])
+        if rest not in {"", "NOT NULL"}:
+            raise ValueError(f"Unsupported column constraint {rest!r}")
+        parsed.append((name, dtype, rest != "NOT NULL"))
+    if has_typed:
+        return [(col, "ANY", True) if isinstance(col, str) else col for col in parsed]
+    return parsed
 
 
 def _help() -> str:
@@ -69,7 +95,7 @@ def main() -> None:
                 match = _CREATE_TABLE.fullmatch(line)
                 if match:
                     name, fields_text, layout = match.groups()
-                    fields = [item.strip() for item in fields_text.split(",") if item.strip()]
+                    fields = _parse_create_fields(fields_text)
                     db.create_table(name, fields, (layout or "ROW").lower())
                     print(f"Created table {name}")
                     continue
