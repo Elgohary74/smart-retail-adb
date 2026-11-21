@@ -1,21 +1,23 @@
 # M1/M2 checklist
 
 ## M1
-- [x] Custom persistent page file (`PageFile`) and 24-byte `PageHeader`
-- [x] Shared DB-wide `BufferPool` with `FIFO`/`LRU`, `pin`/`unpin`, and `lsn` hook
-- [x] Typed binary `RowTable` (slotted pages + overflow) and `ColumnTable` (projection pushdown + batches)
-- [x] Reproducible 5-run benchmarks: FIFO vs. LRU, Row vs. Column, `page` vs. `objects` vs. AES-GCM
-- [x] Automated unit tests across schema, backends, buffer pool, row table, and column table
+- [x] Custom persistent page file
+- [x] Buffer pool with configurable FIFO/LRU
+- [x] Row and column page encodings
+- [x] Counters for cache hits/misses and disk activity
+- [x] Reproducible FIFO-vs-LRU benchmark script
+- [x] Automated storage and layout tests
 
 ## M2
-- [x] `LocalObjectStore` backend with cached page count
-- [x] Page-aware `TransformingBackend` encryption hooks + `CryptoHooks` / `make_aes_gcm_crypto`
-- [x] Persistent page-backed `BPlusTree` (equality, range, delete, duplicate RID buckets)
-- [x] Disk-backed SSTable `LSMTree` (Bloom filters, fence pointers, WAL, tombstones, atomic compaction)
-- [x] Workload telemetry & `choose_index_type` heuristic
-- [x] Safe SQL/DML subset (`SELECT` projection/range/`BETWEEN`/`IS NULL`, `INSERT`, `UPDATE`, `DELETE`)
-- [x] Reproducible 5-run M2 benchmarks: indexed vs. full scan, read-heavy vs. write-heavy, range, index size
+- [x] Common page backend interface and local object-per-page backend
+- [x] Optional encryption/decryption hooks (not encryption by default)
+- [x] B+ Tree point/range lookup
+- [x] LSM memtable, sorted disk runs, point/range lookup, compaction
+- [x] Workload heuristic for selecting B+ Tree vs LSM
+- [x] Simple indexed equality query path
+- [x] B+ Tree/LSM unit tests and an index benchmark script
 
 ## Before formal submission
-- [ ] Run benchmarks on the final target machine with `--plots` and archive CSVs/charts in the report
-- [ ] Record OS, Python version, CPU/RAM, seed, commands, and median/p95 latencies
+- [ ] Run tests and benchmarks on the target machine
+- [ ] Record OS, Python version, machine specs, seed, commands, and repeated-run median/p95 where applicable
+- [ ] Include actual output tables and charts; never invent benchmark measurements
