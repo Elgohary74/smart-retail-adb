@@ -1,7 +1,21 @@
-from .page_file import PAGE_SIZE, PageFile, PageBackend
-from .buffer_pool import BufferPool, BufferStats
-from .table import StorageTable
+from .buffer_pool import BufferFrame, BufferPool, BufferStats
+from .encryption import TransformingBackend, make_aes_gcm_hooks
+from .manager import StorageManager
 from .object_store import LocalObjectStore
-from .encryption import TransformingBackend
+from .page_file import PAGE_SIZE, PageBackend, PageFile
+from .row_table import RowTable, TableStorage
 
-__all__ = ["PAGE_SIZE", "PageFile", "PageBackend", "BufferPool", "BufferStats", "StorageTable", "LocalObjectStore", "TransformingBackend"]
+__all__ = [
+    "PAGE_SIZE",
+    "PageBackend",
+    "PageFile",
+    "LocalObjectStore",
+    "TransformingBackend",
+    "make_aes_gcm_hooks",
+    "StorageManager",
+    "BufferPool",
+    "BufferFrame",
+    "BufferStats",
+    "TableStorage",
+    "RowTable",
+]
