@@ -1,9 +1,25 @@
+# Python
+.env
 .venv/
 __pycache__/
-*.py[cod]
-.pytest_cache/
+*.py[codz]
+*$py.class
 *.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local runtime & benchmark outputs
 retail_data/
 retail_benchmark_data/
 benchmark_results/
 *.tmp
+
+# Course brief & local agent tooling
+docs/CSAI302_Project_doc.pdf
+.agents/
+.superpowers/
+skills-lock.json
