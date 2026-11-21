@@ -1,23 +1,34 @@
-# Smart Retail DB — Milestones 1 and 2
+# Smart Retail DB
 
-A custom educational DBMS implemented in Python using the course's retail-orders domain (`Products`, `Customers`, `Orders`, `OrderItems`, `Inventory`). Core storage, buffering, and indexing are implemented from scratch with zero external database engines.
+A custom educational relational and vector-capable database management system implemented from scratch in Python (CSAI 302 — Advanced Database Systems). It models a **Retail Orders** domain (`Products`, `Customers`, `Orders`, `OrderItems`, `Inventory`) without wrapping SQLite, PostgreSQL, MySQL, DuckDB, or any external storage/index engine.
 
-## What's implemented
+---
 
-### M1 — Storage engine foundation
-- Persistent 4,096-byte pages (`PageFile` and `LocalObjectStore`) with a 24-byte `PageHeader` reserving `lsn` for M4 WAL/ARIES.
-- Single shared database-wide `BufferPool` keyed by `(file_id, page_id)` with `FIFO`/`LRU` eviction, `pin`/`unpin`, dirty write-back, and hit/miss/I/O counters.
-- Typed schemas (`INT`, `FLOAT`, `BOOL`, `STR`, `BYTES`, `VECTOR(D)`, `ANY`) with binary `RowTable` (slotted pages + overflow chains) and `ColumnTable` (per-column page streams, projection pushdown, late materialization, vectorized batches).
-- Reproducible 5-run M1 benchmarks (FIFO vs. LRU, Row vs. Column projection, `page` vs. `objects` vs. AES-GCM).
+## Implemented Milestones
 
-### M2 — Advanced indexing
-- Persistent page-backed `BPlusTree` (`BPLUS_META`, `BPLUS_INTERNAL`, `BPLUS_LEAF`, overflow RID buckets) supporting equality, range, and delete.
-- Disk-backed SSTable `LSMTree` over `StorageManager`/`BufferPool` with Bloom filters, sparse fence pointers, entry-count memtable flush, buffered `memtable.wal`, tombstones, and atomic compaction.
-- Workload-based `auto` index selection (`choose_index_type`) using explicit or observed table telemetry.
-- `TransformingBackend` supporting `(page_id, data) -> bytes` hooks and `make_aes_gcm_hooks(key)` (28-byte AES-256-GCM per-page envelope).
-- Safe SQL subset (`CREATE TABLE`, `INSERT`, `SELECT` projection + `=`/`<`/`<=`/`>`/`>=`/`BETWEEN`/`IS NULL`/`IS NOT NULL`, `UPDATE`, `DELETE`, `CREATE INDEX`).
+### Milestone 1 — Storage Engine Foundation
+- **Persistent Page Backends:** Fixed `4,096`-byte physical pages via contiguous files ([page_file.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/page_file.py)) or one-object-per-page directories ([object_store.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/object_store.py)) behind a shared `PageBackend` protocol and `StorageManager`.
+- **Shared Database-Wide Buffer Pool:** Single `BufferPool` ([buffer_pool.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/buffer_pool.py)) caching `(file_id, page_id)` frames across all tables and indexes with configurable `LRU`/`FIFO` eviction, `pin_page`/`unpin_page`, dirty write-back, WAL-LSN flush guard hook, and hit/miss/I/O counters.
+- **Typed Schemas & Binary Layouts:** [schema.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/schema.py) supports `INT`, `FLOAT`, `BOOL`, `STR`, `BYTES`, `VECTOR(D)`, and `ANY` with strict `bool` vs. `int` separation and lossless order-preserving key encoding.
+  - **`RowTable`** ([row_table.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/row_table.py)): Binary slotted pages (`(page_id, slot_id)` RIDs) with stable slots, in-place/relocating updates, tombstones, and linked `OVERFLOW` pages for records >4 KB (including large embeddings).
+  - **`ColumnTable`** ([column_table.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/column_table.py)): Dedicated per-column page streams + deleted-row bitmap supporting column projection pushdown, late materialization, and vectorized `scan_batches`.
 
-## Quick start
+### Milestone 2 — Advanced Indexing System
+- **Page-Backed B+ Tree** ([bplus_tree.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/bplus_tree.py)): Persistent `BPLUS_META`, `BPLUS_INTERNAL`, and doubly-linked `BPLUS_LEAF` pages inside `StorageManager` + `BufferPool`, supporting equality, inclusive/exclusive range scans, deletes, and overflow RID buckets for high-duplicate keys.
+- **Disk-Backed SSTable LSM Tree** ([lsm_tree.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/lsm_tree.py)): Entry-count memtable + framed `memtable.wal`, immutable `LSM_DATA`/`LSM_META` SSTable runs stored in `StorageManager` + `BufferPool`, `blake2b` Bloom filters, sparse fence pointers, tombstone sequence resolution, and atomic manifest compaction.
+- **Workload-Driven Index Selection** ([manager.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/manager.py)): `choose_index_type(reads, writes, range_reads)` uses observed table telemetry (or explicit counts) to pick `LSM` for write-heavy point workloads and `BPLUS` for read-heavy or range workloads.
+- **Page-Aware Encryption Hooks** ([encryption.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/encryption.py)): `TransformingBackend` wraps any backend with `(page_id, bytes) -> bytes` hooks and configurable `overhead_bytes`, plus `make_aes_gcm_hooks(key)` for authenticated AES-256-GCM encryption on pages and WAL records.
+- **Safe Restricted SQL/DML Engine** ([query.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/query.py), [engine.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/engine.py)): Parses literals via `ast.literal_eval` (rejecting SQL injection, expressions, and `NaN`/`Inf`) and enforces SQL three-valued `NULL` logic.
+
+---
+
+## Prerequisites & Setup
+
+- **Python:** `>= 3.10`
+- **Core Runtime Dependencies:** None (pure Python standard library).
+- **Optional Extras:** `cryptography` (for `make_aes_gcm_hooks`) and `matplotlib` (for `--plots` benchmark charts).
+
+### Linux / macOS
 
 ```bash
 cd smart-retail-adb
@@ -26,32 +37,123 @@ source .venv/bin/activate
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
-*(On Windows PowerShell, use `.\.venv\Scripts\Activate.ps1` and `$env:PYTHONPATH="src"`.)*
+### Windows (PowerShell)
 
-## Run the CLI
+```powershell
+cd smart-retail-adb
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+$env:PYTHONPATH = "src"
+python -m unittest discover -s tests -v
+```
+
+*(If `setuptools` is installed in your environment, `pip install -e .` also registers the `smartdb` console entry point.)*
+
+---
+
+## Interactive CLI & Supported SQL
+
+Start the interactive shell:
 
 ```bash
-PYTHONPATH=src python -m smartdb.cli --db ./retail_data
+PYTHONPATH=src python -m smartdb.cli --db ./retail_data --buffer-frames 64 --policy LRU --backend page
 ```
 
-Example session:
+Use `--backend objects` to store every table, column, B+ Tree, and LSM SSTable page as an individual object file via `LocalObjectStore`.
 
-```sql
-CREATE TABLE Products (product_id INT, name STR, category STR, price FLOAT, stock INT) LAYOUT ROW;
-INSERT INTO Products VALUES (1, 'Keyboard', 'Accessories', 29.99, 20);
-INSERT INTO Products VALUES (2, 'Mouse', 'Accessories', 15.50, 35);
-CREATE INDEX ON Products (price) USING BPLUS;
-SELECT product_id, name FROM Products WHERE price BETWEEN 10.0 AND 30.0;
-:explain SELECT product_id, name FROM Products WHERE price BETWEEN 10.0 AND 30.0
-:stats
+### Supported Commands
+
+| Feature | Syntax Example |
+| :--- | :--- |
+| Typed / Untyped Table | `CREATE TABLE Products (product_id INT, name STR, category STR, price FLOAT, stock INT) LAYOUT ROW;` |
+| Columnar Table | `CREATE TABLE Sales (id INT, category STR, price FLOAT) LAYOUT COLUMN;` |
+| Vector Column | `CREATE TABLE Embeddings (id INT, vec VECTOR(3)) LAYOUT ROW;` |
+| Insert | `INSERT INTO Products VALUES (1, 'Keyboard', 'Accessories', 29.99, 20);` |
+| Projection & Filter | `SELECT product_id, name FROM Products WHERE price BETWEEN 10.0 AND 50.0;` |
+| Comparison & Nulls | `SELECT * FROM Products WHERE price >= 20;` / `WHERE price IS NOT NULL;` |
+| Update & Delete | `UPDATE Products SET stock = 19 WHERE product_id = 1;` / `DELETE FROM Products WHERE product_id = 1;` |
+| Index Creation | `CREATE INDEX ON Products (price) USING BPLUS;` or `USING AUTO READS 100 WRITES 10;` |
+| Shell Meta-Commands | `:explain <SELECT ...>`, `:stats`, `:tables`, `:help`, `:quit` |
+
+---
+
+## Python API Quick Example
+
+```python
+from smartdb.engine import SmartRetailDB
+from smartdb.schema import ColumnSpec, DataType
+
+with SmartRetailDB("./retail_demo", buffer_frames=64, replacement_policy="LRU") as db:
+    db.create_table(
+        "Products",
+        [
+            ColumnSpec("product_id", DataType.INT, nullable=False),
+            ColumnSpec("name", DataType.STR, nullable=False),
+            ColumnSpec("price", DataType.FLOAT),
+        ],
+        layout="column",
+    )
+    db.create_index("Products", "price", index_type="BPLUS")
+    db.insert("Products", {"product_id": 1, "name": "Keyboard", "price": 29.99})
+    db.insert("Products", {"product_id": 2, "name": "Mouse", "price": 15.50})
+
+    rows = db.execute("SELECT product_id, name FROM Products WHERE price BETWEEN 10.0 AND 25.0")
+    print(rows)          # [{'product_id': 2, 'name': 'Mouse'}]
+    print(db.buffer_stats())
 ```
 
-## Generate demo dataset & run benchmarks
+---
+
+## Retail Dataset & Reproducible Benchmarks
+
+Generate a deterministic synthetic Retail Orders dataset (`Products`, `Customers`, `Orders`, `OrderItems`, `Inventory`):
 
 ```bash
 PYTHONPATH=src python workloads/generate_retail_data.py --db ./retail_data --products 10000 --customers 1000 --orders 5000 --seed 42
-PYTHONPATH=src python benchmarks/benchmark_storage.py --pages 128 --accesses 10000 --records 2000 --repeats 5
-PYTHONPATH=src python benchmarks/benchmark_indexes.py --records 2000 --repeats 5
 ```
 
-Pass `--plots` to save PNG charts alongside the CSVs in `benchmark_results/` (requires `matplotlib`).
+Run the M1 and M2 benchmarks (each defaults to **1 warm-up + 5 measured repeats**, reporting environment metadata, wall-clock `mean_ms`/`median_ms`/`p95_ms`/`stdev_ms`, `ops_per_sec`, page I/O, and index byte size to `benchmark_results/`):
+
+```bash
+PYTHONPATH=src python benchmarks/benchmark_storage.py --pages 128 --accesses 10000 --records 2000 --repeats 5 --plots
+PYTHONPATH=src python benchmarks/benchmark_indexes.py --records 2000 --repeats 5 --plots
+```
+
+| Script | Scenarios Measured | Output CSV |
+| :--- | :--- | :--- |
+| [benchmark_storage.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/benchmarks/benchmark_storage.py) | FIFO vs. LRU trace; Row vs. Column 2-column projection scan; `page` vs. `objects` vs. AES-GCM insert throughput | `benchmark_results/m1_storage.csv` |
+| [benchmark_indexes.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/benchmarks/benchmark_indexes.py) | Full scan vs. B+ Tree vs. LSM point lookup; Write-heavy (`80W/20R`) vs. Read-heavy (`90R/10W`) vs. Range scan; index disk footprint | `benchmark_results/m2_indexes.csv` |
+
+---
+
+## Repository Structure
+
+```text
+src/smartdb/
+  schema.py                 # Typed columns, record validation, lossless key encoding, binary row codecs
+  engine.py                 # SmartRetailDB coordinator, DML/SELECT execution, crash reconciliation
+  query.py                  # Restricted safe SQL/DML/DDL parser
+  cli.py                    # Interactive REPL
+  storage/
+    page_file.py            # PageBackend protocol & contiguous PageFile (4,096 B)
+    object_store.py         # LocalObjectStore (one .obj file per page, cached page count)
+    encryption.py           # TransformingBackend hooks & optional AES-256-GCM helper
+    manager.py              # StorageManager mapping logical files <-> file_id
+    buffer_pool.py          # Shared multi-file BufferPool (LRU/FIFO, pin/unpin, LSN guard)
+    slotted_page.py         # 24-byte PageHeader, PageType enum, SlottedPage
+    overflow.py             # Linked OVERFLOW page chain reader/writer
+    row_table.py            # TableStorage protocol & slotted-page RowTable
+    column_table.py         # Per-column ColumnTable (projection pushdown, late materialization, batches)
+  indexes/
+    bplus_tree.py           # Page-backed B+ Tree with leaf links & duplicate RID buckets
+    lsm_tree.py             # SSTable LSM Tree (Bloom filters, fence pointers, WAL, compaction)
+    manager.py              # IndexManager & choose_index_type heuristic
+tests/                      # 36 unit & integration tests (8 test modules)
+benchmarks/                 # Reproducible M1/M2 benchmark harness & plotting
+workloads/                  # Deterministic Retail Orders data generator
+docs/
+  architecture.md           # Component interfaces, binary page formats, and M3-M5 integration design
+  milestone-checklist.md    # M1/M2 verification checklist
+```
+
+See [docs/architecture.md](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/docs/architecture.md) for binary page layouts, design rationale, and how Milestones 3–5 integrate on top of this engine.
