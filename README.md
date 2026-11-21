@@ -130,7 +130,11 @@ PYTHONPATH=src python benchmarks/benchmark_indexes.py --records 2000 --repeats 5
 
 ```text
 src/smartdb/
-  schema.py                 # Typed columns, record validation, lossless key encoding, binary row codecs
+  schema.py                 # Typed columns, TableSchema, and record validation
+  key_codec.py              # Lossless order-preserving key encoding/decoding
+  row_codec.py              # Binary value & row serialization with projection skip
+  catalog.py                # Atomic catalog.json & indexes.json persistence
+  predicates.py             # SQL three-valued predicate evaluation
   engine.py                 # SmartRetailDB coordinator, DML/SELECT execution, crash reconciliation
   query.py                  # Restricted safe SQL/DML/DDL parser
   cli.py                    # Interactive REPL
@@ -143,10 +147,16 @@ src/smartdb/
     slotted_page.py         # 24-byte PageHeader, PageType enum, SlottedPage
     overflow.py             # Linked OVERFLOW page chain reader/writer
     row_table.py            # TableStorage protocol & slotted-page RowTable
-    column_table.py         # Per-column ColumnTable (projection pushdown, late materialization, batches)
+    column_codec.py         # Columnar bitmap and fixed/variable page codecs
+    column_table.py         # Per-column ColumnTable (projection pushdown, vectorized batches)
   indexes/
+    bplus_pages.py          # Binary B+ Tree meta/internal/leaf page codecs
+    rid_buckets.py          # Linked OVERFLOW RID-bucket pages for duplicate keys
     bplus_tree.py           # Page-backed B+ Tree with leaf links & duplicate RID buckets
-    lsm_tree.py             # SSTable LSM Tree (Bloom filters, fence pointers, WAL, compaction)
+    bloom.py                # Compact blake2b Bloom filter
+    sstable.py              # Immutable SSTable run page writer/reader
+    lsm_wal.py              # Buffered framed Write-Ahead Log for memtable durability
+    lsm_tree.py             # Disk-backed SSTable LSM Tree (compaction & tombstones)
     manager.py              # IndexManager & choose_index_type heuristic
 tests/                      # 36 unit & integration tests (8 test modules)
 benchmarks/                 # Reproducible M1/M2 benchmark harness & plotting

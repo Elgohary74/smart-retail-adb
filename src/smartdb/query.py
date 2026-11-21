@@ -10,42 +10,24 @@ from typing import Any
 from .schema import ColumnSpec, DataType
 
 _ID = r"[A-Za-z_][A-Za-z0-9_]*"
-
-_CREATE_TABLE_RE = re.compile(
-    rf"^\s*CREATE\s+TABLE\s+({_ID})\s*\((.+?)\)\s*(?:LAYOUT\s+(ROW|COLUMN))?\s*;?\s*$",
-    re.IGNORECASE | re.DOTALL,
+_RE_SELECT = re.compile(rf"^\s*SELECT\s+(\*|{_ID}(?:\s*,\s*{_ID})*)\s+FROM\s+({_ID})(?:\s+WHERE\s+(.+?))?\s*;?\s*$", re.I | re.S)
+_RE_CREATE_TABLE = re.compile(rf"^\s*CREATE\s+TABLE\s+({_ID})\s*\((.+?)\)\s*(?:LAYOUT\s+(ROW|COLUMN))?\s*;?\s*$", re.I | re.S)
+_RE_INSERT = re.compile(rf"^\s*INSERT\s+INTO\s+({_ID})\s+VALUES\s*\((.+)\)\s*;?\s*$", re.I | re.S)
+_RE_CREATE_INDEX = re.compile(
+    rf"^\s*CREATE\s+INDEX\s+ON\s+({_ID})\s*\(\s*({_ID})\s*\)\s+USING\s+(AUTO|BPLUS|LSM)(?:\s+READS\s+(\d+)\s+WRITES\s+(\d+))?\s*;?\s*$",
+    re.I,
 )
-_INSERT_RE = re.compile(
-    rf"^\s*INSERT\s+INTO\s+({_ID})\s+VALUES\s*\((.+)\)\s*;?\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
-_CREATE_INDEX_RE = re.compile(
-    rf"^\s*CREATE\s+INDEX\s+ON\s+({_ID})\s*\(\s*({_ID})\s*\)\s+USING\s+(AUTO|BPLUS|LSM)"
-    r"(?:\s+READS\s+(\d+)\s+WRITES\s+(\d+))?\s*;?\s*$",
-    re.IGNORECASE,
-)
-_SELECT_RE = re.compile(
-    rf"^\s*SELECT\s+(\*|{_ID}(?:\s*,\s*{_ID})*)\s+FROM\s+({_ID})(?:\s+WHERE\s+(.+?))?\s*;?\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
-_UPDATE_RE = re.compile(
-    rf"^\s*UPDATE\s+({_ID})\s+SET\s+(.+?)(?:\s+WHERE\s+(.+?))?\s*;?\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
-_DELETE_RE = re.compile(
-    rf"^\s*DELETE\s+FROM\s+({_ID})(?:\s+WHERE\s+(.+?))?\s*;?\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
-
-_BETWEEN_RE = re.compile(rf"^\s*({_ID})\s+BETWEEN\s+(.+?)\s+AND\s+(.+?)\s*$", re.IGNORECASE | re.DOTALL)
-_IS_NULL_RE = re.compile(rf"^\s*({_ID})\s+IS\s+(NOT\s+)?NULL\s*$", re.IGNORECASE)
-_CMP_RE = re.compile(rf"^\s*({_ID})\s*(<=|>=|=|<|>)\s*(.+?)\s*$", re.IGNORECASE | re.DOTALL)
+_RE_UPDATE = re.compile(rf"^\s*UPDATE\s+({_ID})\s+SET\s+(.+?)(?:\s+WHERE\s+(.+?))?\s*;?\s*$", re.I | re.S)
+_RE_DELETE = re.compile(rf"^\s*DELETE\s+FROM\s+({_ID})(?:\s+WHERE\s+(.+?))?\s*;?\s*$", re.I | re.S)
+_RE_BETWEEN = re.compile(rf"^\s*({_ID})\s+BETWEEN\s+(.+?)\s+AND\s+(.+?)\s*$", re.I | re.S)
+_RE_IS_NULL = re.compile(rf"^\s*({_ID})\s+IS\s+(NOT\s+)?NULL\s*$", re.I)
+_RE_CMP = re.compile(rf"^\s*({_ID})\s*(<=|>=|=|<|>)\s*(.+?)\s*$", re.I | re.S)
 
 
 @dataclass(frozen=True)
 class Predicate:
     field: str
-    op: str  # "=", "<", "<=", ">", ">=", "BETWEEN", "IS_NULL", "IS_NOT_NULL"
+    op: str
     value: Any = None
     high: Any = None
 
@@ -97,18 +79,13 @@ SQLStatement = CreateTableStmt | InsertStmt | CreateIndexStmt | SelectStmt | Upd
 
 def _parse_literal(raw: str, allow_vector: bool = False) -> Any:
     text = raw.strip()
-    upper = text.upper()
-    if upper == "NULL":
-        return None
-    if upper == "TRUE":
-        return True
-    if upper == "FALSE":
-        return False
+    if text.upper() in {"NULL", "TRUE", "FALSE"}:
+        return {"NULL": None, "TRUE": True, "FALSE": False}[text.upper()]
     try:
         val = ast.literal_eval(text)
     except (ValueError, SyntaxError) as exc:
         raise ValueError(f"Invalid literal: {text!r}") from exc
-    if isinstance(val, complex) or val is Ellipsis:
+    if isinstance(val, complex) or val is Ellipsis or isinstance(val, (dict, set)):
         raise ValueError(f"Unsupported literal: {text!r}")
     if isinstance(val, float) and not math.isfinite(val):
         raise ValueError("Literal float must be finite")
@@ -116,121 +93,81 @@ def _parse_literal(raw: str, allow_vector: bool = False) -> Any:
         if not allow_vector:
             raise ValueError("Scalar literal expected")
         return [float(x) for x in val]
-    if isinstance(val, (dict, set)):
-        raise ValueError("Scalar literal expected")
     return val
 
 
 def _split_top_level(text: str) -> list[str]:
-    items: list[str] = []
-    buf: list[str] = []
-    depth = 0
-    quote: str | None = None
-    escaped = False
+    items, buf, depth, quote, escaped = [], [], 0, None, False
     for ch in text:
         if escaped:
-            buf.append(ch)
-            escaped = False
-            continue
+            buf.append(ch); escaped = False; continue
         if quote is not None:
             buf.append(ch)
-            if ch == "\\":
-                escaped = True
-            elif ch == quote:
+            escaped = (ch == "\\")
+            if ch == quote and not escaped:
                 quote = None
             continue
         if ch in ("'", '"'):
             quote = ch
-            buf.append(ch)
         elif ch in "([":
             depth += 1
-            buf.append(ch)
         elif ch in ")]":
             depth -= 1
-            buf.append(ch)
         elif ch == "," and depth == 0:
-            items.append("".join(buf).strip())
-            buf = []
-        else:
-            buf.append(ch)
-    tail = "".join(buf).strip()
-    if tail:
+            items.append("".join(buf).strip()); buf = []; continue
+        buf.append(ch)
+    if tail := "".join(buf).strip():
         items.append(tail)
     return items
 
 
 def parse_where(text: str) -> Predicate:
-    m = _BETWEEN_RE.fullmatch(text)
-    if m:
+    if m := _RE_BETWEEN.fullmatch(text):
         field, raw_low, raw_high = m.groups()
-        return Predicate(field=field, op="BETWEEN", value=_parse_literal(raw_low), high=_parse_literal(raw_high))
-    m = _IS_NULL_RE.fullmatch(text)
-    if m:
-        field, is_not = m.groups()
-        return Predicate(field=field, op="IS_NOT_NULL" if is_not else "IS_NULL")
-    m = _CMP_RE.fullmatch(text)
-    if m:
-        field, op, raw_val = m.groups()
-        return Predicate(field=field, op=op, value=_parse_literal(raw_val))
+        return Predicate(field, "BETWEEN", _parse_literal(raw_low), _parse_literal(raw_high))
+    if m := _RE_IS_NULL.fullmatch(text):
+        return Predicate(m.group(1), "IS_NOT_NULL" if m.group(2) else "IS_NULL")
+    if m := _RE_CMP.fullmatch(text):
+        return Predicate(m.group(1), m.group(2), _parse_literal(m.group(3)))
     raise ValueError(f"Unsupported WHERE clause: {text!r}")
 
 
+def _build_create_table(m: re.Match[str]) -> CreateTableStmt:
+    cols = []
+    for part in _split_top_level(m.group(2)):
+        tokens = part.split(None, 1)
+        if len(tokens) == 1:
+            cols.append(ColumnSpec(tokens[0], DataType.ANY))
+        else:
+            dtype, dim = DataType.parse(tokens[1])
+            cols.append(ColumnSpec(tokens[0], dtype, dim=dim))
+    return CreateTableStmt(m.group(1), cols, (m.group(3) or "ROW").lower())
+
+
+def _build_update(m: re.Match[str]) -> UpdateStmt:
+    updates = {}
+    for assign in _split_top_level(m.group(2)):
+        if "=" not in assign:
+            raise ValueError(f"Invalid SET assignment: {assign!r}")
+        col, raw_val = assign.split("=", 1)
+        updates[col.strip()] = _parse_literal(raw_val, allow_vector=True)
+    return UpdateStmt(m.group(1), updates, parse_where(m.group(3)) if m.group(3) else None)
+
+
+_DISPATCH = [
+    (_RE_SELECT, lambda m: SelectStmt(m.group(2), None if m.group(1).strip() == "*" else [c.strip() for c in m.group(1).split(",")], parse_where(m.group(3)) if m.group(3) else None)),
+    (_RE_CREATE_TABLE, _build_create_table),
+    (_RE_INSERT, lambda m: InsertStmt(m.group(1), [_parse_literal(x, allow_vector=True) for x in _split_top_level(m.group(2))])),
+    (_RE_CREATE_INDEX, lambda m: CreateIndexStmt(m.group(1), m.group(2), m.group(3).lower(), int(m.group(4)) if m.group(4) else None, int(m.group(5)) if m.group(5) else None)),
+    (_RE_UPDATE, _build_update),
+    (_RE_DELETE, lambda m: DeleteStmt(m.group(1), parse_where(m.group(2)) if m.group(2) else None)),
+]
+
+
 def parse_sql(sql: str) -> SQLStatement:
-    m = _SELECT_RE.fullmatch(sql)
-    if m:
-        cols_text, table, where_text = m.groups()
-        cols = None if cols_text.strip() == "*" else [c.strip() for c in cols_text.split(",")]
-        where = parse_where(where_text) if where_text is not None else None
-        return SelectStmt(table=table, columns=cols, where=where)
-
-    m = _CREATE_TABLE_RE.fullmatch(sql)
-    if m:
-        table, cols_text, layout = m.groups()
-        cols: list[ColumnSpec] = []
-        for part in _split_top_level(cols_text):
-            tokens = part.split(None, 1)
-            if len(tokens) == 1:
-                cols.append(ColumnSpec(tokens[0], DataType.ANY))
-            else:
-                dtype, dim = DataType.parse(tokens[1])
-                cols.append(ColumnSpec(tokens[0], dtype, dim=dim))
-        return CreateTableStmt(table=table, columns=cols, layout=(layout or "ROW").lower())
-
-    m = _INSERT_RE.fullmatch(sql)
-    if m:
-        table, vals_text = m.groups()
-        values = [_parse_literal(item, allow_vector=True) for item in _split_top_level(vals_text)]
-        return InsertStmt(table=table, values=values)
-
-    m = _CREATE_INDEX_RE.fullmatch(sql)
-    if m:
-        table, field, kind, reads, writes = m.groups()
-        return CreateIndexStmt(
-            table=table,
-            field=field,
-            index_type=kind.lower(),
-            reads=int(reads) if reads is not None else None,
-            writes=int(writes) if writes is not None else None,
-        )
-
-    m = _UPDATE_RE.fullmatch(sql)
-    if m:
-        table, set_text, where_text = m.groups()
-        updates: dict[str, Any] = {}
-        for assign in _split_top_level(set_text):
-            if "=" not in assign:
-                raise ValueError(f"Invalid SET assignment: {assign!r}")
-            col, raw_val = assign.split("=", 1)
-            updates[col.strip()] = _parse_literal(raw_val, allow_vector=True)
-        where = parse_where(where_text) if where_text is not None else None
-        return UpdateStmt(table=table, updates=updates, where=where)
-
-    m = _DELETE_RE.fullmatch(sql)
-    if m:
-        table, where_text = m.groups()
-        where = parse_where(where_text) if where_text is not None else None
-        return DeleteStmt(table=table, where=where)
-
+    for pattern, builder in _DISPATCH:
+        if m := pattern.fullmatch(sql):
+            return builder(m)
     raise ValueError("Unsupported or unsafe SQL statement")
 
 
