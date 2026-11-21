@@ -48,7 +48,7 @@ src/smartdb/
 │   └── lsm/                 LSMTree, BloomFilter, SSTable writer/reader, LSMWal
 ├── query/                -> SQL AST, parsing & predicate evaluation (M2 -> M3)
 │   ├── ast.py               Predicate & DDL/DML/SELECT AST dataclasses
-│   ├── parser.py            parse_sql, parse_select, parse_where
+│   ├── parser.py            parse_sql, parse_where
 │   └── predicates.py        matches_predicate (SQL three-valued NULL logic)
 └── engine/               -> Database coordinator (M1-M6)
     ├── db.py                SmartRetailDB
@@ -72,7 +72,7 @@ src/smartdb/
 
 ### Run Tests
 ```bash
-# Full suite (41 tests)
+# Full suite (46 tests)
 PYTHONPATH=src python -m unittest discover -s tests -v
 
 # Single test module while iterating

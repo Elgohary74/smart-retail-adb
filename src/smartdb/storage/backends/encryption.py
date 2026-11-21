@@ -110,13 +110,3 @@ def make_aes_gcm_crypto(key: bytes) -> CryptoHooks:
         return aes.decrypt(raw[:12], raw[12:], b"wal")
 
     return CryptoHooks(page_encrypt, page_decrypt, AES_GCM_OVERHEAD_BYTES, record_encrypt, record_decrypt)
-
-
-def make_aes_gcm_hooks(
-    key: bytes,
-) -> tuple[PageTransform, PageTransform, int, RecordTransform, RecordTransform]:
-    """Return (page_enc, page_dec, overhead, rec_enc, rec_dec) using AES-256-GCM."""
-    hooks = make_aes_gcm_crypto(key)
-    if hooks.page_encrypt is None or hooks.page_decrypt is None or hooks.record_encrypt is None or hooks.record_decrypt is None:
-        raise RuntimeError("AES-GCM hooks failed to initialize")
-    return hooks.page_encrypt, hooks.page_decrypt, hooks.overhead_bytes, hooks.record_encrypt, hooks.record_decrypt

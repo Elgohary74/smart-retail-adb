@@ -1,7 +1,13 @@
+import io
 import os
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
+
+from smartdb import cli
 
 from smartdb.core import ColumnSpec, DataType
 from smartdb.engine import SmartRetailDB
@@ -143,6 +149,50 @@ class EngineTests(unittest.TestCase):
             reopened = SmartRetailDB(root, backend_kind="objects", crypto=crypto)
             self.assertEqual(reopened.execute("SELECT name FROM Products WHERE id = 7"), [{"name": "Monitor"}])
             reopened.close()
+
+    def test_mixed_type_range_consistency_and_bool_vector_rejection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = SmartRetailDB(tmp)
+            db.create_table("T", [ColumnSpec("id", DataType.INT), ColumnSpec("vec", DataType.VECTOR, dim=2)])
+            db.insert("T", {"id": 10, "vec": [1.0, 2.0]})
+
+            self.assertEqual(db.execute("SELECT * FROM T WHERE id < 'abc'"), [])
+            self.assertEqual(db.execute("SELECT * FROM T WHERE id BETWEEN 1 AND 'abc'"), [])
+            with self.assertRaises(TypeError):
+                db.execute("INSERT INTO T VALUES (11, [True, False])")
+
+            db.create_index("T", "id", "BPLUS")
+            self.assertEqual(db.execute("SELECT * FROM T WHERE id < 'abc'"), [])
+            self.assertEqual(db.execute("UPDATE T SET vec = [3.0, 4.0] WHERE id = 10"), 1)
+            self.assertEqual(db.execute("DELETE FROM T WHERE id = 10"), 1)
+            self.assertEqual(db.execute("SELECT * FROM T"), [])
+            db.close()
+
+    def test_cli_repl_handles_commands_and_overflow_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = iter([
+                ":help",
+                "CREATE TABLE T (id INT);",
+                "INSERT INTO T VALUES (1);",
+                "INSERT INTO T VALUES (99999999999999999999999);",
+                ":explain SELECT * FROM T WHERE id = 1;",
+                "SELECT * FROM T WHERE id = 1;",
+                ":tables",
+                ":stats",
+                ":quit",
+            ])
+            buf = io.StringIO()
+            with (
+                mock.patch.object(sys, "argv", ["smartdb", "--db", tmp]),
+                mock.patch("builtins.input", side_effect=lambda _: next(inputs)),
+                redirect_stdout(buf),
+            ):
+                cli.main()
+            out = buf.getvalue()
+            self.assertIn("Created table T", out)
+            self.assertIn("ERROR: OverflowError:", out)
+            self.assertIn("{'id': 1}", out)
+            self.assertIn("['T']", out)
 
 
 if __name__ == "__main__":

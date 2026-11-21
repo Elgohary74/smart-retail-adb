@@ -7,7 +7,6 @@ from .backends import (
     StorageManager,
     TransformingBackend,
     make_aes_gcm_crypto,
-    make_aes_gcm_hooks,
 )
 from .buffer_pool import BufferFrame, BufferPool, BufferStats
 from .tables import ColumnTable, RowTable, TableStorage
@@ -20,7 +19,6 @@ __all__ = [
     "CryptoHooks",
     "TransformingBackend",
     "make_aes_gcm_crypto",
-    "make_aes_gcm_hooks",
     "StorageManager",
     "BufferPool",
     "BufferFrame",

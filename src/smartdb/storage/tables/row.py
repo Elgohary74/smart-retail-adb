@@ -59,8 +59,7 @@ class RowTable:
             _, first_ovf = unpack_overflow_stub(payload)
             free_overflow_chain(self.pool, self._ovf_file_id, first_ovf)
 
-    def insert(self, record: dict[str, Any]) -> RID:
-        payload = self._encode_payload(record)
+    def _insert_payload(self, payload: bytes) -> RID:
         count = self._data_backend.page_count
         if count > 0:
             last_pid = count - 1
@@ -77,6 +76,9 @@ class RowTable:
             return pid, slot_id
         finally:
             self.pool.unpin_page(pid, is_dirty=True, file_id=self._data_file_id)
+
+    def insert(self, record: dict[str, Any]) -> RID:
+        return self._insert_payload(self._encode_payload(record))
 
     def try_get_record(self, rid: RID, fields: list[str] | None = None) -> dict[str, Any] | None:
         page_id, slot_id = int(rid[0]), int(rid[1])
@@ -110,7 +112,7 @@ class RowTable:
                 self._free_payload_overflow(old_payload)
             return rid
         self.delete(rid)
-        return self.insert(merged)
+        return self._insert_payload(new_payload)
 
     def delete(self, rid: RID) -> bool:
         page_id, slot_id = int(rid[0]), int(rid[1])

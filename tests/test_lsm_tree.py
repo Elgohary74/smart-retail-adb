@@ -129,6 +129,21 @@ class LSMTreeTests(unittest.TestCase):
             pool.close()
             mgr.close_all()
 
+    def test_lsm_multi_page_duplicate_key_lookup_and_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lsm = LSMTree(tmp, flush_threshold=500, compaction_threshold=10, key_dtype=DataType.STR)
+            lsm.insert("alpha", (0, 0))
+            for i in range(400):
+                lsm.insert("popular", (i // 50 + 1, i % 50))
+            lsm.insert("zebra", (99, 0))
+            lsm.flush()
+            self.assertGreaterEqual(len(lsm.runs[0].fence), 3)
+            self.assertEqual(len(lsm.search("popular")), 400)
+            self.assertEqual(len(lsm.range_search("popular", "popular")), 400)
+            self.assertEqual(lsm.search("alpha"), [(0, 0)])
+            self.assertEqual(lsm.search("zebra"), [(99, 0)])
+            lsm.close()
+
 
 if __name__ == "__main__":
     unittest.main()

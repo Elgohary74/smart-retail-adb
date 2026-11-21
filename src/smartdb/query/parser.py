@@ -48,6 +48,8 @@ def _parse_literal(raw: str, allow_vector: bool = False) -> Any:
     if isinstance(val, (list, tuple)):
         if not allow_vector:
             raise ValueError("Scalar literal expected")
+        if any(isinstance(x, bool) for x in val):
+            raise TypeError("Vector elements cannot be BOOL")
         return [float(x) for x in val]
     return val
 
@@ -126,10 +128,3 @@ def parse_sql(sql: str) -> SQLStatement:
         if m := pattern.fullmatch(sql):
             return builder(m)
     raise ValueError("Unsupported or unsafe SQL statement")
-
-
-def parse_select(sql: str) -> SelectStmt:
-    stmt = parse_sql(sql)
-    if not isinstance(stmt, SelectStmt):
-        raise ValueError("Expected a SELECT statement")
-    return stmt

@@ -120,6 +120,27 @@ class RowTableTests(unittest.TestCase):
             pool.close()
             mgr.close_all()
 
+    def test_updating_oversized_row_does_not_duplicate_overflow_pages(self):
+        schema = TableSchema([
+            ColumnSpec("id", DataType.INT, nullable=False),
+            ColumnSpec("desc", DataType.STR),
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = StorageManager(tmp)
+            pool = BufferPool(capacity=8, storage_manager=mgr)
+            tbl = RowTable(mgr, pool, "Big", schema)
+            rid = tbl.insert({"id": 1, "desc": "A" * 5000})
+            ovf_fid = mgr.file_id_for("table:Big:overflow")
+            assert ovf_fid is not None
+            before_ovf_pages = mgr.get_backend(ovf_fid).page_count
+
+            new_rid = tbl.update(rid, {"desc": "B" * 6000})
+            self.assertEqual(tbl.get_record(new_rid), {"id": 1, "desc": "B" * 6000})
+            # 2 pages before + 2 pages for the single updated overflow chain = 4
+            self.assertEqual(mgr.get_backend(ovf_fid).page_count, before_ovf_pages + 2)
+            pool.close()
+            mgr.close_all()
+
 
 if __name__ == "__main__":
     unittest.main()

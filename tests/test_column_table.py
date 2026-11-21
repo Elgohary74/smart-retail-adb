@@ -71,6 +71,30 @@ class ColumnTableTests(unittest.TestCase):
             pool2.close()
             mgr2.close_all()
 
+    def test_column_table_var_overflow_round_trip(self):
+        schema = TableSchema([
+            ColumnSpec("id", DataType.INT, nullable=False),
+            ColumnSpec("blob_txt", DataType.STR),
+        ])
+        huge = "X" * 5500
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = StorageManager(tmp)
+            pool = BufferPool(capacity=16, storage_manager=mgr)
+            tbl = ColumnTable(mgr, pool, "Docs", schema)
+            r0 = tbl.insert({"id": 1, "blob_txt": huge})
+            tbl.insert({"id": 2, "blob_txt": None})
+            self.assertEqual(tbl.get_record(r0), {"id": 1, "blob_txt": huge})
+            pool.close()
+            mgr.close_all()
+
+            mgr2 = StorageManager(tmp)
+            pool2 = BufferPool(capacity=16, storage_manager=mgr2)
+            tbl2 = ColumnTable(mgr2, pool2, "Docs", schema)
+            batches = list(tbl2.scan_batches())
+            self.assertEqual(batches[0]["blob_txt"], [huge, None])
+            pool2.close()
+            mgr2.close_all()
+
 
 if __name__ == "__main__":
     unittest.main()

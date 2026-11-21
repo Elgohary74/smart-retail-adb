@@ -28,9 +28,12 @@ def matches_predicate(schema: TableSchema, record: dict[str, Any], pred: Predica
         return val is not None and isinstance(val, bool) == isinstance(target, bool) and val == target
     if val is None or target is None or isinstance(val, bool) != isinstance(target, bool):
         return False
-    if pred.op in _CMP_OPS:
-        return _CMP_OPS[pred.op](val, target)
-    if pred.op == "BETWEEN":
-        high = schema.coerce_literal(pred.field, pred.high)
-        return high is not None and isinstance(val, bool) == isinstance(high, bool) and target <= val <= high
+    try:
+        if pred.op in _CMP_OPS:
+            return _CMP_OPS[pred.op](val, target)
+        if pred.op == "BETWEEN":
+            high = schema.coerce_literal(pred.field, pred.high)
+            return high is not None and isinstance(val, bool) == isinstance(high, bool) and target <= val <= high
+    except TypeError:
+        return False
     raise ValueError(f"Unsupported predicate operator: {pred.op}")

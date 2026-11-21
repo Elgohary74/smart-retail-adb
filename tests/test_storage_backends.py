@@ -9,7 +9,7 @@ from smartdb.storage import (
     PageFile,
     StorageManager,
     TransformingBackend,
-    make_aes_gcm_hooks,
+    make_aes_gcm_crypto,
 )
 
 
@@ -47,10 +47,12 @@ class StorageBackendTests(unittest.TestCase):
 
     def test_aes_gcm_hooks_with_overhead_and_tamper_detection(self):
         with tempfile.TemporaryDirectory() as tmp:
-            enc, dec, overhead, rec_enc, rec_dec = make_aes_gcm_hooks(os.urandom(32))
-            self.assertEqual(overhead, 28)
+            crypto = make_aes_gcm_crypto(os.urandom(32))
+            self.assertEqual(crypto.overhead_bytes, 28)
             raw = PageFile(Path(tmp) / "sec.pages")
-            wrapped = TransformingBackend(raw, encrypt=enc, decrypt=dec, overhead_bytes=overhead)
+            wrapped = TransformingBackend(
+                raw, encrypt=crypto.page_encrypt, decrypt=crypto.page_decrypt, overhead_bytes=crypto.overhead_bytes
+            )
             self.assertEqual(wrapped.physical_page_size, 4096)
             self.assertEqual(wrapped.usable_page_size, 4068)
 
@@ -60,8 +62,9 @@ class StorageBackendTests(unittest.TestCase):
             self.assertEqual(wrapped.read_page(pid), msg)
 
             # Record transform for WAL
-            ct_rec = rec_enc(b"wal-entry")
-            self.assertEqual(rec_dec(ct_rec), b"wal-entry")
+            assert crypto.record_encrypt is not None and crypto.record_decrypt is not None
+            ct_rec = crypto.record_encrypt(b"wal-entry")
+            self.assertEqual(crypto.record_decrypt(ct_rec), b"wal-entry")
 
             # Tamper physical byte on disk -> decryption must fail
             raw_bytes = bytearray(raw.read_page(pid))

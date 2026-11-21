@@ -195,9 +195,6 @@ class BufferPool:
             if frame.dirty:
                 self._flush_frame(frame)
 
-    def flush(self) -> None:
-        self.flush_all()
-
     def unregister_file(self, file_id: int, drop_dirty: bool = True) -> None:
         if not drop_dirty:
             self.flush_file(file_id)

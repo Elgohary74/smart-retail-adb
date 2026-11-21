@@ -131,14 +131,27 @@ class SmartRetailDB:
         self._catalog.table_stats[table_name]["writes"] += 1
         return rid
 
+    def _matching_records(self, table: TableStorage, table_name: str, where: Predicate | None) -> list[tuple[RID, dict[str, Any]]]:
+        if where is not None:
+            table.schema.column(where.field)
+            rids = self._lookup_rids(table, table_name, where)
+            if rids is not None:
+                matched: list[tuple[RID, dict[str, Any]]] = []
+                for rid in dict.fromkeys(rids):
+                    rec = table.try_get_record(rid)
+                    if rec is not None and matches_predicate(table.schema, rec, where):
+                        matched.append((rid, rec))
+                return matched
+        return [
+            (rid, rec) for rid, rec in table.iter_records()
+            if where is None or matches_predicate(table.schema, rec, where)
+        ]
+
     def update(self, table_name: str, updates: dict[str, Any], where: Predicate | None = None) -> int:
         table = self._get_table(table_name)
         for col_name, val in updates.items():
             table.schema.validate_value(table.schema.column(col_name), val)
-        targets = [
-            (rid, rec) for rid, rec in table.iter_records()
-            if where is None or matches_predicate(table.schema, rec, where)
-        ]
+        targets = self._matching_records(table, table_name, where)
         for old_rid, old_rec in targets:
             new_rec = {**old_rec, **updates}
             new_rid = table.update(old_rid, updates)
@@ -152,10 +165,7 @@ class SmartRetailDB:
 
     def delete(self, table_name: str, where: Predicate | None = None) -> int:
         table = self._get_table(table_name)
-        targets = [
-            (rid, rec) for rid, rec in table.iter_records()
-            if where is None or matches_predicate(table.schema, rec, where)
-        ]
+        targets = self._matching_records(table, table_name, where)
         for rid, rec in targets:
             if table.delete(rid):
                 for field in table.schema.field_names:

@@ -6,7 +6,6 @@ from .encryption import (
     RecordTransform,
     TransformingBackend,
     make_aes_gcm_crypto,
-    make_aes_gcm_hooks,
 )
 from .manager import StorageManager
 from .object_store import LocalObjectStore
@@ -22,6 +21,5 @@ __all__ = [
     "RecordTransform",
     "TransformingBackend",
     "make_aes_gcm_crypto",
-    "make_aes_gcm_hooks",
     "StorageManager",
 ]

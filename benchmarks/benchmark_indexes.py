@@ -97,7 +97,9 @@ def bench_workloads(records: int, ops: int, seed: int, repeats: int) -> list[dic
         with tempfile.TemporaryDirectory() as tmp:
             db, _ = _setup_db(tmp, records, idx_type, seed)
             def _range() -> dict[str, Any]:
-                res = db.execute(f"SELECT product_id FROM Products WHERE product_id BETWEEN 100 AND {100 + min(200, records // 2)}")
+                low_id = min(100, records // 4)
+                high_id = low_id + min(200, max(1, records // 2))
+                res = db.execute(f"SELECT product_id FROM Products WHERE product_id BETWEEN {low_id} AND {high_id}")
                 assert len(res) > 0
                 return {"rows_returned": len(res)}
 

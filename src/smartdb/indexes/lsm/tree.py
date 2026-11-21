@@ -37,7 +37,10 @@ def _resolve_ops(ops: OpList) -> list[RID]:
 def _start_page_for_key(run: SSTableRun, key_bytes: bytes | None) -> int:
     if key_bytes is None or not run.fence:
         return 0
-    return run.fence[max(0, bisect_right(run.fence_keys, key_bytes) - 1)][1]
+    idx = bisect_left(run.fence_keys, key_bytes)
+    if idx < len(run.fence) and run.fence_keys[idx] == key_bytes:
+        return run.fence[idx][1]
+    return run.fence[max(0, idx - 1)][1]
 
 
 class LSMTree:

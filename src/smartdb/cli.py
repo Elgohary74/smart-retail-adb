@@ -72,7 +72,7 @@ def main() -> None:
             try:
                 if not _run_line(db, line):
                     break
-            except (ValueError, TypeError, KeyError, IndexError, OSError) as exc:
+            except (ValueError, TypeError, KeyError, IndexError, OverflowError, RuntimeError, OSError) as exc:
                 print(f"ERROR: {type(exc).__name__}: {exc}")
 
 

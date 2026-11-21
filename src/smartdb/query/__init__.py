@@ -8,7 +8,7 @@ from .ast import (
     SQLStatement,
     UpdateStmt,
 )
-from .parser import parse_select, parse_sql, parse_where
+from .parser import parse_sql, parse_where
 from .predicates import matches_predicate
 
 __all__ = [
@@ -21,7 +21,6 @@ __all__ = [
     "DeleteStmt",
     "SQLStatement",
     "parse_sql",
-    "parse_select",
     "parse_where",
     "matches_predicate",
 ]

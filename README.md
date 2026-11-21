@@ -23,7 +23,7 @@ A custom educational relational and vector-capable database management system im
 - **Page-Backed B+ Tree** ([tree.py](src/smartdb/indexes/bplus/tree.py)): Persistent `BPLUS_META`, `BPLUS_INTERNAL`, and doubly-linked `BPLUS_LEAF` pages inside `StorageManager` + `BufferPool` with page-type validation, equality, inclusive/exclusive range scans, and overflow RID buckets with empty-page reclamation ([buckets.py](src/smartdb/indexes/bplus/buckets.py)).
 - **Disk-Backed SSTable LSM Tree** ([tree.py](src/smartdb/indexes/lsm/tree.py)): Entry-count memtable + framed `memtable.wal` ([wal.py](src/smartdb/indexes/lsm/wal.py)), immutable `LSM_DATA`/`LSM_META` SSTable runs stored in `StorageManager` + `BufferPool`, validated `blake2b` Bloom filters, pre-indexed sparse fence pointers, tombstone sequence resolution, atomic manifest compaction, and full `destroy()` cleanup.
 - **Workload-Driven Index Selection** ([manager.py](src/smartdb/indexes/manager.py)): `choose_index_type(reads, writes, range_reads)` uses observed table telemetry (`WorkloadProfile`) to pick `LSM` for write-heavy point workloads and `BPLUS` for read-heavy or range workloads over a shared `IndexProtocol` ([indexes/base.py](src/smartdb/indexes/base.py)).
-- **Page-Aware Encryption Hooks** ([encryption.py](src/smartdb/storage/backends/encryption.py)): `TransformingBackend` wraps any backend with `(page_id, bytes) -> bytes` hooks and configurable `overhead_bytes`, configured via `CryptoHooks` and `make_aes_gcm_crypto(key)` (or raw-tuple `make_aes_gcm_hooks(key)`) for authenticated AES-256-GCM encryption on pages and WAL records.
+- **Page-Aware Encryption Hooks** ([encryption.py](src/smartdb/storage/backends/encryption.py)): `TransformingBackend` wraps any backend with `(page_id, bytes) -> bytes` hooks and configurable `overhead_bytes`, configured via `CryptoHooks` and `make_aes_gcm_crypto(key)` for authenticated AES-256-GCM encryption on pages and WAL records.
 - **Safe Restricted SQL/DML Engine** ([ast.py](src/smartdb/query/ast.py), [parser.py](src/smartdb/query/parser.py), [db.py](src/smartdb/engine/db.py)): Parses literals via `ast.literal_eval` (rejecting SQL injection, expressions, and `NaN`/`Inf`) and enforces SQL three-valued `NULL` logic.
 
 ---
@@ -116,7 +116,7 @@ smartdb> :quit
 
 ## Running Tests
 
-Run the full automated suite (41 tests across 9 modules):
+Run the full automated suite (46 tests across 9 modules):
 
 ```bash
 # Linux / macOS
@@ -246,7 +246,7 @@ src/smartdb/
       sstable.py            # Immutable SSTable run page writer/reader
       wal.py                # Buffered framed Write-Ahead Log for memtable durability
       tree.py               # Disk-backed SSTable LSM Tree (compaction & tombstones)
-tests/                      # 41 unit & integration tests (9 test modules)
+tests/                      # 46 unit & integration tests (9 test modules)
 benchmarks/                 # Reproducible M1/M2 benchmark harness & plotting
 workloads/                  # Deterministic Retail Orders data generator
 docs/
