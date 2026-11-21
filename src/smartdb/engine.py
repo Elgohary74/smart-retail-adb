@@ -1,17 +1,27 @@
 """High-level Smart Retail DB engine integrating custom storage and indexes."""
 from __future__ import annotations
+
 import json
 from pathlib import Path
-from typing import Any
-from .storage.table import StorageTable
+from typing import Any, Sequence
+
 from .indexes.manager import IndexManager
 from .query import parse_select
+from .storage.buffer_pool import BufferPool
+from .storage.schema import ColumnSpec, TableSchema
+from .storage.table import StorageTable
 
 
 class SmartRetailDB:
-    def __init__(self, directory: str | Path, buffer_frames: int = 16,
-                 replacement_policy: str = "LRU", backend_kind: str = "page",
-                 encrypt_page=None, decrypt_page=None):
+    def __init__(
+        self,
+        directory: str | Path,
+        buffer_frames: int = 16,
+        replacement_policy: str = "LRU",
+        backend_kind: str = "page",
+        encrypt_page=None,
+        decrypt_page=None,
+    ):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.buffer_frames = buffer_frames
@@ -19,6 +29,7 @@ class SmartRetailDB:
         self.backend_kind = backend_kind
         self.encrypt_page = encrypt_page
         self.decrypt_page = decrypt_page
+        self.pool = BufferPool(capacity=buffer_frames, policy=replacement_policy)
         self.catalog_path = self.directory / "catalog.json"
         self.index_catalog_path = self.directory / "indexes.json"
         self.tables: dict[str, StorageTable] = {}
@@ -47,34 +58,51 @@ class SmartRetailDB:
         temp.replace(self.catalog_path)
 
     def _open_tables(self) -> None:
-        for name, schema in self.schemas.items():
+        for name, entry in self.schemas.items():
+            raw_schema = entry.get("columns") or entry["fields"]
+            schema = TableSchema.from_dict(raw_schema)
             self.tables[name] = StorageTable(
                 self.directory / "tables" / f"{name}.pages",
-                fields=schema["fields"], layout=schema["layout"],
-                buffer_frames=self.buffer_frames,
-                replacement_policy=self.replacement_policy,
-                backend_kind=schema.get("backend_kind", self.backend_kind),
-                encrypt_page=self.encrypt_page, decrypt_page=self.decrypt_page,
+                fields=schema,
+                layout=entry["layout"],
+                backend_kind=entry.get("backend_kind", self.backend_kind),
+                encrypt_page=self.encrypt_page,
+                decrypt_page=self.decrypt_page,
+                pool=self.pool,
+                stream_prefix=name,
             )
 
-    def create_table(self, name: str, fields: list[str], layout: str = "row") -> None:
+    def create_table(
+        self,
+        name: str,
+        fields: TableSchema | Sequence[ColumnSpec],
+        layout: str = "row",
+    ) -> None:
         self._normal_name(name)
         if name in self.tables:
             raise ValueError(f"Table {name} already exists")
-        if layout not in {"row", "column"}:
+        normalized_layout = layout.lower()
+        if normalized_layout not in {"row", "column"}:
             raise ValueError("layout must be 'row' or 'column'")
-        if not fields or any(not f.isidentifier() for f in fields) or len(fields) != len(set(fields)):
-            raise ValueError("fields must be unique Python-style identifiers")
-        schema = {"fields": list(fields), "layout": layout, "backend_kind": self.backend_kind}
+        schema = fields if isinstance(fields, TableSchema) else TableSchema.from_spec(fields)
+        entry = {
+            "columns": schema.to_dict(),
+            "fields": schema.field_names,
+            "layout": normalized_layout,
+            "backend_kind": self.backend_kind,
+        }
         table = StorageTable(
-            self.directory / "tables" / f"{name}.pages", fields=fields,
-            layout=layout, buffer_frames=self.buffer_frames,
-            replacement_policy=self.replacement_policy,
+            self.directory / "tables" / f"{name}.pages",
+            fields=schema,
+            layout=normalized_layout,
             backend_kind=self.backend_kind,
-            encrypt_page=self.encrypt_page, decrypt_page=self.decrypt_page,
+            encrypt_page=self.encrypt_page,
+            decrypt_page=self.decrypt_page,
+            pool=self.pool,
+            stream_prefix=name,
         )
         self.tables[name] = table
-        self.schemas[name] = schema
+        self.schemas[name] = entry
         self._save_catalog()
 
     def insert(self, table_name: str, record: dict[str, Any]) -> tuple[int, int]:
@@ -84,8 +112,25 @@ class SmartRetailDB:
             self.index_manager.add(table_name, field, record[field], locator)
         return locator
 
-    def create_index(self, table_name: str, field: str, index_type: str = "auto",
-                     reads: int = 100, writes: int = 10) -> str:
+    def update(self, table_name: str, locator: tuple[int, int], record: dict[str, Any]) -> tuple[int, int]:
+        table = self._get_table(table_name)
+        new_locator = table.update(locator, record)
+        for field in table.fields:
+            self.index_manager.add(table_name, field, record[field], new_locator)
+        return new_locator
+
+    def delete(self, table_name: str, locator: tuple[int, int]) -> None:
+        table = self._get_table(table_name)
+        table.delete(locator)
+
+    def create_index(
+        self,
+        table_name: str,
+        field: str,
+        index_type: str = "auto",
+        reads: int = 100,
+        writes: int = 10,
+    ) -> str:
         table = self._get_table(table_name)
         if field not in table.fields:
             raise KeyError(f"Unknown field {field!r} in table {table_name!r}")
@@ -122,6 +167,13 @@ class SmartRetailDB:
             for locator, record in self.tables[table_name].iter_records():
                 index.insert(record[field], locator)
 
+    @staticmethod
+    def _safe_get_record(table: StorageTable, locator: tuple[int, int]) -> dict[str, Any] | None:
+        try:
+            return table.get_record(locator)
+        except (KeyError, IndexError):
+            return None
+
     def execute(self, sql: str) -> list[dict[str, Any]]:
         query = parse_select(sql)
         table = self._get_table(query.table)
@@ -132,9 +184,17 @@ class SmartRetailDB:
         locators = self.index_manager.search(query.table, query.field, query.value)
         if locators is None:
             return table.scan(query.field, query.value)
-        # An index can contain stale locators only if a data file was changed
-        # outside this engine; verify the predicate before returning rows.
-        return [record for loc in locators if (record := table.get_record(loc)).get(query.field) == query.value]
+        results: list[dict[str, Any]] = []
+        seen_locators: set[tuple[int, int]] = set()
+        for loc in locators:
+            loc_key = (int(loc[0]), int(loc[1]))
+            if loc_key in seen_locators:
+                continue
+            seen_locators.add(loc_key)
+            record = self._safe_get_record(table, loc_key)
+            if record is not None and record.get(query.field) == query.value:
+                results.append(record)
+        return results
 
     def explain(self, sql: str) -> str:
         query = parse_select(sql)
@@ -146,8 +206,8 @@ class SmartRetailDB:
             return f"INDEX LOOKUP {kind} ON {query.table}.{query.field} -> FETCH PAGE/ROW"
         return f"TABLE SCAN {query.table} FILTER {query.field} = {query.value!r}"
 
-    def buffer_stats(self) -> dict[str, dict[str, Any]]:
-        return {name: table.pool.snapshot() for name, table in self.tables.items()}
+    def buffer_stats(self) -> dict[str, float | int | str]:
+        return self.pool.snapshot()
 
     def _get_table(self, name: str) -> StorageTable:
         if name not in self.tables:
@@ -158,6 +218,7 @@ class SmartRetailDB:
         self.index_manager.close()
         for table in self.tables.values():
             table.close()
+        self.pool.close()
 
     def __enter__(self) -> "SmartRetailDB":
         return self

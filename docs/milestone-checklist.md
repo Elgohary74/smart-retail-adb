@@ -2,11 +2,12 @@
 
 ## M1
 - [x] Custom persistent page file
-- [x] Buffer pool with configurable FIFO/LRU
-- [x] Row and column page encodings
+- [x] Shared DB-wide buffer pool with configurable FIFO/LRU and page pinning
+- [x] Row layout (slotted JSON pages + tombstones) and Column layout (per-column streams + projection)
+- [x] Optional typed schemas (`INT`, `FLOAT`, `STR`, `BOOL`) and `insert`/`update`/`delete`/`scan`
 - [x] Counters for cache hits/misses and disk activity
-- [x] Reproducible FIFO-vs-LRU benchmark script
-- [x] Automated storage and layout tests
+- [x] Reproducible multi-suite M1 benchmark script (warm-up + 5 repeats, mean/median/p95/stdev)
+- [x] Automated storage, layout, and persistence tests
 
 ## M2
 - [x] Common page backend interface and local object-per-page backend
