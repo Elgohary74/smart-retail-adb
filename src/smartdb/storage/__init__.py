@@ -1,4 +1,5 @@
 from .buffer_pool import BufferFrame, BufferPool, BufferStats
+from .column_table import ColumnTable
 from .encryption import TransformingBackend, make_aes_gcm_hooks
 from .manager import StorageManager
 from .object_store import LocalObjectStore
@@ -18,4 +19,5 @@ __all__ = [
     "BufferStats",
     "TableStorage",
     "RowTable",
+    "ColumnTable",
 ]
