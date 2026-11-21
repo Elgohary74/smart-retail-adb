@@ -72,6 +72,28 @@ class BPlusTree:
         pos = bisect_left(leaf.keys, key)
         return list(leaf.values[pos]) if pos < len(leaf.keys) and leaf.keys[pos] == key else []
 
+    def remove(self, key: Any, value: Any) -> bool:
+        """Drop a locator from a key bucket; delete the key when its bucket empties.
+
+        No rebalancing is performed: empty leaves stay linked so later inserts and
+        range scans keep working. The tree is rebuilt from storage on open anyway.
+        """
+        leaf = self._find_leaf(key)
+        pos = bisect_left(leaf.keys, key)
+        if pos >= len(leaf.keys) or leaf.keys[pos] != key:
+            return False
+        bucket = leaf.values[pos]
+        remaining = [item for item in bucket if item != value]
+        if len(remaining) == len(bucket):
+            return False
+        if remaining:
+            leaf.values[pos] = remaining
+        else:
+            del leaf.keys[pos]
+            del leaf.values[pos]
+            self.size -= 1
+        return True
+
     def range_search(self, low: Any | None = None, high: Any | None = None) -> list[tuple[Any, Any]]:
         if low is None:
             leaf = self.root

@@ -97,6 +97,37 @@ class EngineTests(unittest.TestCase):
                 reopened.insert("Products", {"product_id": "bad", "name": "Bad", "price": 1.0})
             reopened.close()
 
+    def test_delete_removes_bplus_and_lsm_index_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "db"
+            db = SmartRetailDB(root)
+            db.create_table("Products", [("product_id", "INT", False), ("name", "STR", False)], layout="row")
+            db.create_table("Customers", [("customer_id", "INT", False), ("name", "STR", False)], layout="column")
+
+            p1 = db.insert("Products", {"product_id": 1, "name": "Keyboard"})
+            db.insert("Products", {"product_id": 2, "name": "Mouse"})
+            c1 = db.insert("Customers", {"customer_id": 10, "name": "Alice"})
+            db.insert("Customers", {"customer_id": 11, "name": "Bob"})
+
+            db.create_index("Products", "product_id", "BPLUS")
+            db.create_index("Customers", "customer_id", "LSM")
+            self.assertEqual(db.index_manager.search("Products", "product_id", 1), [p1])
+            self.assertEqual(db.index_manager.search("Customers", "customer_id", 10), [c1])
+
+            db.delete("Products", p1)
+            db.delete("Customers", c1)
+            self.assertEqual(db.index_manager.search("Products", "product_id", 1), [])
+            self.assertEqual(db.index_manager.search("Customers", "customer_id", 10), [])
+            self.assertEqual(db.execute("SELECT * FROM Products WHERE product_id = 1"), [])
+            self.assertEqual(db.execute("SELECT * FROM Customers WHERE customer_id = 10"), [])
+            db.close()
+
+            reopened = SmartRetailDB(root)
+            self.assertEqual(reopened.index_manager.search("Products", "product_id", 1), [])
+            self.assertEqual(reopened.index_manager.search("Customers", "customer_id", 10), [])
+            self.assertEqual(reopened.execute("SELECT * FROM Customers WHERE customer_id = 10"), [])
+            reopened.close()
+
     def test_cli_parse_create_fields_typed_and_untyped(self):
         self.assertEqual(_parse_create_fields("id, name, price"), ["id", "name", "price"])
         self.assertEqual(

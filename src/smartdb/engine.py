@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .indexes.manager import IndexManager
+from .indexes.lsm_tree import LSMTree
 from .query import parse_select
 from .storage.buffer_pool import BufferPool
 from .storage.schema import ColumnSpec, TableSchema
@@ -121,7 +122,10 @@ class SmartRetailDB:
 
     def delete(self, table_name: str, locator: tuple[int, int]) -> None:
         table = self._get_table(table_name)
+        record = table.get_record(locator)
         table.delete(locator)
+        for field in table.fields:
+            self.index_manager.remove(table_name, field, record[field], locator)
 
     def create_index(
         self,
@@ -138,7 +142,7 @@ class SmartRetailDB:
         # B+ Tree indexes are rebuilt from the table whenever the DB opens.
         # For an LSM index with existing sorted runs, retain the persisted runs
         # to avoid duplicating entries; otherwise build it for current records.
-        has_persisted_lsm_data = kind == "LSM" and bool(index.runs)
+        has_persisted_lsm_data = isinstance(index, LSMTree) and bool(index.runs)
         if not has_persisted_lsm_data:
             for locator, record in table.iter_records():
                 index.insert(record[field], locator)
@@ -162,7 +166,7 @@ class SmartRetailDB:
             if table_name not in self.tables or field not in self.tables[table_name].fields:
                 continue
             _, index = self.index_manager.create(table_name, field, kind)
-            if kind == "LSM" and index.runs:
+            if isinstance(index, LSMTree) and index.runs:
                 continue
             for locator, record in self.tables[table_name].iter_records():
                 index.insert(record[field], locator)

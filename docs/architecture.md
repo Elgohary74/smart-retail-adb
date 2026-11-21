@@ -137,9 +137,10 @@ The Layout Manager translates Python records into 4 KB pages and handles record 
 
 ## 5. M2 Indexing & Query Execution
 
-* **`BPlusTree` (`indexes/bplus_tree.py`):** In-memory B+ Tree with linked leaves and duplicate-key buckets; rebuilt from `StorageTable.iter_records()` when the DB opens.
-* **`LSMTree` (`indexes/lsm_tree.py`):** Buffers writes in `memtable` and flushes sorted `run_*.jsonl` files to `<db>/index_data/<table>/<field>/`; compacts runs when `len(runs) >= 8`.
+* **`BPlusTree` (`indexes/bplus_tree.py`):** In-memory B+ Tree with linked leaves and duplicate-key buckets; rebuilt from `StorageTable.iter_records()` when the DB opens. `remove()` drops a locator from its bucket and deletes the key once the bucket empties (no rebalancing, since the tree is rebuilt on open).
+* **`LSMTree` (`indexes/lsm_tree.py`):** Buffers writes in `memtable` and flushes sorted `run_*.jsonl` files to `<db>/index_data/<table>/<field>/`; compacts runs when `len(runs) >= 8`. `remove()` appends durable entries to `tombstones.jsonl`, which are filtered from point/range lookups and purged on the next compaction.
 * **Index Selection (`indexes/manager.py`):** `auto` chooses `LSM` when `writes > 2 * max(1, reads)`; otherwise chooses `BPLUS`.
+* **Delete Maintenance (`engine.py`):** `SmartRetailDB.delete()` reads the row, tombstones it in storage, then calls `IndexManager.remove()` for every field so index entries do not accumulate.
 * **Safe Query Execution (`query.py` & `engine.py`):** `parse_select` accepts only `SELECT * FROM table [WHERE field = literal]` using `ast.literal_eval`. On indexed lookups, `SmartRetailDB.execute()` deduplicates locators, skips tombstoned/deleted records cleanly via `_safe_get_record()`, and re-verifies `record.get(field) == value`.
 
 ---

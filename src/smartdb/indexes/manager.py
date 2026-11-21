@@ -41,6 +41,11 @@ class IndexManager:
         if item is not None:
             item[1].insert(value, locator)
 
+    def remove(self, table: str, field: str, value: Any, locator: tuple[int, int]) -> None:
+        item = self.indexes.get((table, field))
+        if item is not None:
+            item[1].remove(value, locator)
+
     def search(self, table: str, field: str, value: Any) -> list[tuple[int, int]] | None:
         item = self.indexes.get((table, field))
         if item is None:
