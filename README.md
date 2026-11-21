@@ -2,6 +2,12 @@
 
 A custom educational relational and vector-capable database management system implemented from scratch in Python (CSAI 302 — Advanced Database Systems). It models a **Retail Orders** domain (`Products`, `Customers`, `Orders`, `OrderItems`, `Inventory`) without wrapping SQLite, PostgreSQL, MySQL, DuckDB, or any external storage/index engine.
 
+## Documentation
+
+- **New to the project?** Start with [docs/project-overview.md](docs/project-overview.md) (what Smart Retail DB does, domain model, request flow, and benchmarks).
+- **New to the code?** Read [docs/developer-guide.md](docs/developer-guide.md) (where to start reading, package ownership, key invariants, and where M3–M5 plug in).
+- **Deep dive:** See [docs/architecture.md](docs/architecture.md) (binary page formats and component contracts) and [docs/milestone-checklist.md](docs/milestone-checklist.md).
+
 ---
 
 ## Implemented Milestones
