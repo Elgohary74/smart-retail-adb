@@ -24,8 +24,8 @@ This document explains the internal design, data formats, key design trade-offs,
 |         StorageTable (table.py)       | |   IndexManager (indexes/)     |
 |  - Validates records via TableSchema  | |  - BPlusTree (in-memory,      |
 |  - Delegates to RowLayout or          | |    rebuilt on open)           |
-|    ColumnLayout                       | |  - LSMTree (memtable +        |
-+-------------------+-------------------+ |    sorted JSONL disk runs)    |
+|    ColumnLayout                       | |  - LSMTree (memtable + runs,  |
++-------------------+-------------------+ |    rebuilt on open)           |
                     |                     +-------------------------------+
                     v
 +-------------------------------------------------------------------------+
@@ -138,9 +138,10 @@ The Layout Manager translates Python records into 4 KB pages and handles record 
 ## 5. M2 Indexing & Query Execution
 
 * **`BPlusTree` (`indexes/bplus_tree.py`):** In-memory B+ Tree with linked leaves and duplicate-key buckets; rebuilt from `StorageTable.iter_records()` when the DB opens. `remove()` drops a locator from its bucket and deletes the key once the bucket empties (no rebalancing, since the tree is rebuilt on open).
-* **`LSMTree` (`indexes/lsm_tree.py`):** Buffers writes in `memtable` and flushes sorted `run_*.jsonl` files to `<db>/index_data/<table>/<field>/`; compacts runs when `len(runs) >= 8`. `remove()` appends durable entries to `tombstones.jsonl`, which are filtered from point/range lookups and purged on the next compaction.
+* **`LSMTree` (`indexes/lsm_tree.py`):** Buffers writes in `memtable` and flushes sorted `run_*.jsonl` files to `<db>/index_data/<table>/<field>/`; compacts runs when `len(runs) >= 8`. `remove()` appends durable entries to `tombstones.jsonl`, which are filtered from point/range lookups and purged on the next compaction. `reset()` drops persisted runs/tombstones so the index can be rebuilt from storage on open like the B+ Tree.
 * **Index Selection (`indexes/manager.py`):** `auto` chooses `LSM` when `writes > 2 * max(1, reads)`; otherwise chooses `BPLUS`.
-* **Delete Maintenance (`engine.py`):** `SmartRetailDB.delete()` reads the row, tombstones it in storage, then calls `IndexManager.remove()` for every field so index entries do not accumulate.
+* **Delete/Update Maintenance (`engine.py`):** `SmartRetailDB.delete()` reads the row, tombstones it in storage, then calls `IndexManager.remove()` for every field. `SmartRetailDB.update()` reads the previous row, removes changed entries at the old locator, and inserts them at the new locator (unchanged fields at an unchanged locator are skipped), so index entries are replaced rather than duplicated.
+* **Rebuild on Open (`engine.py`):** Both index types are rebuilt from live table rows on open; persisted LSM runs are discarded first. This keeps indexes consistent even if rows were written while an index definition was absent.
 * **Safe Query Execution (`query.py` & `engine.py`):** `parse_select` accepts only `SELECT * FROM table [WHERE field = literal]` using `ast.literal_eval`. On indexed lookups, `SmartRetailDB.execute()` deduplicates locators, skips tombstoned/deleted records cleanly via `_safe_get_record()`, and re-verifies `record.get(field) == value`.
 
 ---

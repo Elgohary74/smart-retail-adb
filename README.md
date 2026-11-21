@@ -18,9 +18,9 @@ All data storage, buffer management, page layouts, and indexes are implemented f
 
 ### M2 — Advanced Indexing
 * **B+ Tree (`BPlusTree`):** Leaf sibling links for range scans and duplicate-key locator buckets (rebuilt from storage on open).
-* **LSM Tree (`LSMTree`):** In-memory memtable flushing to sorted JSONL runs on disk with compaction.
+* **LSM Tree (`LSMTree`):** In-memory memtable flushing to sorted JSONL runs on disk with compaction (rebuilt from storage on open).
 * **Workload-Based Auto Selection:** `auto` chooses `LSM` when `writes > 2 * max(1, reads)` and `BPLUS` otherwise.
-* **Delete-Aware Index Maintenance:** `BPlusTree.remove()` drops a locator and deletes emptied key buckets; `LSMTree.remove()` writes durable `tombstones.jsonl` entries that are filtered on lookup and purged during compaction. `SmartRetailDB.delete()` removes index entries for every field.
+* **Delete/Update-Aware Index Maintenance:** `BPlusTree.remove()` drops a locator and deletes emptied key buckets; `LSMTree.remove()` writes durable `tombstones.jsonl` entries that are filtered on lookup and purged during compaction. `SmartRetailDB.delete()` removes index entries for every field, and `SmartRetailDB.update()` replaces changed entries instead of appending duplicates.
 * **Object-Store Backend (`LocalObjectStore`):** One local object file per page behind the `PageBackend` interface.
 * **Encryption Hooks (`TransformingBackend`):** Optional paired same-length `encrypt`/`decrypt` hooks (identity pass-through by default; supply an approved cipher externally if needed).
 * **Safe Restricted Query Parser:** Supports `SELECT * FROM table [WHERE field = literal]` parsed via `ast.literal_eval` (rejects expressions such as `OR 1=1`).
@@ -144,7 +144,7 @@ Optional flags:
 
 ## Testing
 
-Run the full `unittest` suite (29 tests):
+Run the full `unittest` suite (32 tests):
 
 ```bash
 # After `pip install -e .`
@@ -156,8 +156,8 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 Test coverage by file:
 * [tests/test_storage.py](tests/test_storage.py) — `PageFile`, `LocalObjectStore`, `TransformingBackend`, `TableSchema`, `BufferPool` (`FIFO` vs `LRU`, multi-stream sharing, pinning, dirty write-back), `RowLayout`, `ColumnLayout` (projection I/O savings), and `StorageTable` reopen persistence.
-* [tests/test_indexes.py](tests/test_indexes.py) — `BPlusTree` splits/point/range lookup and locator removal, `LSMTree` memtable flush/reload, tombstone filtering/persistence, compaction cleanup, and `auto` index selection.
-* [tests/test_engine.py](tests/test_engine.py) — `SmartRetailDB` end-to-end persistence, shared buffer pool, `update`/`delete` with indexes, injection rejection, and CLI schema parsing.
+* [tests/test_indexes.py](tests/test_indexes.py) — `BPlusTree` splits/point/range lookup and locator removal, `LSMTree` memtable flush/reload, tombstone filtering/persistence, compaction cleanup, reset/rebuild, and `auto` index selection.
+* [tests/test_engine.py](tests/test_engine.py) — `SmartRetailDB` end-to-end persistence, shared buffer pool, `update`/`delete` index replacement, index rebuild on open, injection rejection, and CLI schema parsing.
 * [tests/test_workload.py](tests/test_workload.py) — 5-table retail dataset generator integrity and incremental append.
 
 ---

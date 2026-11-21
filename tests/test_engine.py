@@ -128,6 +128,66 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(reopened.execute("SELECT * FROM Customers WHERE customer_id = 10"), [])
             reopened.close()
 
+    def test_update_replaces_stale_index_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "db"
+            db = SmartRetailDB(root)
+            db.create_table("Products", [("product_id", "INT", False), ("name", "STR", False)], layout="row")
+            db.create_table("Customers", [("customer_id", "INT", False), ("name", "STR", False)], layout="column")
+
+            p1 = db.insert("Products", {"product_id": 1, "name": "Keyboard"})
+            p2 = db.insert("Products", {"product_id": 2, "name": "Mouse"})
+            c1 = db.insert("Customers", {"customer_id": 10, "name": "Alice"})
+            c2 = db.insert("Customers", {"customer_id": 11, "name": "Bob"})
+            db.create_index("Products", "product_id", "BPLUS")
+            db.create_index("Customers", "customer_id", "LSM")
+
+            db.update("Products", p2, {"product_id": 20, "name": "Mouse"})
+            self.assertEqual(db.index_manager.search("Products", "product_id", 2), [])
+            self.assertEqual(db.index_manager.search("Products", "product_id", 20), [p2])
+            bplus = db.index_manager.indexes[("Products", "product_id")][1]
+            self.assertEqual(bplus.size, 2)  # keys 1 and 20 only
+
+            db.update("Customers", c2, {"customer_id": 21, "name": "Bob"})
+            self.assertEqual(db.index_manager.search("Customers", "customer_id", 11), [])
+            self.assertEqual(db.index_manager.search("Customers", "customer_id", 21), [c2])
+
+            # Moving a value back must not duplicate the locator (LSM tombstones).
+            db.update("Customers", c2, {"customer_id": 11, "name": "Bob"})
+            self.assertEqual(db.index_manager.search("Customers", "customer_id", 11), [c2])
+            self.assertEqual(db.index_manager.search("Customers", "customer_id", 21), [])
+
+            # A non-indexed field change must not duplicate the existing entry.
+            db.update("Products", p1, {"product_id": 1, "name": "Mech Keyboard"})
+            self.assertEqual(db.index_manager.search("Products", "product_id", 1), [p1])
+            self.assertEqual(db.index_manager.search("Customers", "customer_id", 10), [c1])
+            db.close()
+
+    def test_indexes_rebuild_on_open_even_with_persisted_lsm_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "db"
+            db = SmartRetailDB(root)
+            db.create_table("Products", [("product_id", "INT", False), ("name", "STR", False)], layout="row")
+            db.insert("Products", {"product_id": 1, "name": "Book"})
+            db.create_index("Products", "product_id", "LSM")
+            db.close()
+
+            catalog = root / "indexes.json"
+            saved_catalog = catalog.read_text(encoding="utf-8")
+            catalog.unlink()
+
+            # Insert a row while the index definition is absent.
+            db = SmartRetailDB(root)
+            loc2 = db.insert("Products", {"product_id": 2, "name": "Pen"})
+            db.close()
+
+            catalog.write_text(saved_catalog, encoding="utf-8")
+            db = SmartRetailDB(root)
+            self.assertEqual(db.index_manager.search("Products", "product_id", 2), [loc2])
+            self.assertEqual(db.execute("SELECT * FROM Products WHERE product_id = 2")[0]["name"], "Pen")
+            self.assertEqual(db.execute("SELECT * FROM Products WHERE product_id = 1")[0]["name"], "Book")
+            db.close()
+
     def test_cli_parse_create_fields_typed_and_untyped(self):
         self.assertEqual(_parse_create_fields("id, name, price"), ["id", "name", "price"])
         self.assertEqual(

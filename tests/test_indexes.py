@@ -78,6 +78,26 @@ class IndexTests(unittest.TestCase):
             self.assertEqual(len(idx.runs), 1)
             idx.close()
 
+    def test_lsm_reset_clears_persisted_runs_and_tombstones(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "lsm"
+            idx = LSMTree(directory, flush_threshold=1)
+            idx.insert(1, (0, 0))
+            idx.insert(2, (0, 1))
+            idx.remove(1, (0, 0))
+            self.assertTrue(idx.runs)
+            self.assertTrue(idx.tombstone_path.exists())
+
+            idx.reset()
+            self.assertEqual(idx.runs, [])
+            self.assertEqual(idx.search(1), [])
+            self.assertEqual(idx.search(2), [])
+            self.assertFalse(idx.tombstone_path.exists())
+
+            idx.insert(3, (0, 2))
+            self.assertEqual(idx.search(3), [(0, 2)])
+            idx.close()
+
     def test_auto_selection(self):
         self.assertEqual(choose_index_type(reads=100, writes=10), "BPLUS")
         self.assertEqual(choose_index_type(reads=10, writes=100), "LSM")

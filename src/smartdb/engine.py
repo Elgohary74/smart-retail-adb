@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .indexes.manager import IndexManager
-from .indexes.lsm_tree import LSMTree
 from .query import parse_select
 from .storage.buffer_pool import BufferPool
 from .storage.schema import ColumnSpec, TableSchema
@@ -115,8 +114,13 @@ class SmartRetailDB:
 
     def update(self, table_name: str, locator: tuple[int, int], record: dict[str, Any]) -> tuple[int, int]:
         table = self._get_table(table_name)
-        new_locator = table.update(locator, record)
+        old_locator = (int(locator[0]), int(locator[1]))
+        previous = table.get_record(old_locator)
+        new_locator = table.update(old_locator, record)
         for field in table.fields:
+            if new_locator == old_locator and previous[field] == record[field]:
+                continue
+            self.index_manager.remove(table_name, field, previous[field], old_locator)
             self.index_manager.add(table_name, field, record[field], new_locator)
         return new_locator
 
@@ -139,15 +143,17 @@ class SmartRetailDB:
         if field not in table.fields:
             raise KeyError(f"Unknown field {field!r} in table {table_name!r}")
         kind, index = self.index_manager.create(table_name, field, index_type, reads, writes)
-        # B+ Tree indexes are rebuilt from the table whenever the DB opens.
-        # For an LSM index with existing sorted runs, retain the persisted runs
-        # to avoid duplicating entries; otherwise build it for current records.
-        has_persisted_lsm_data = isinstance(index, LSMTree) and bool(index.runs)
-        if not has_persisted_lsm_data:
-            for locator, record in table.iter_records():
-                index.insert(record[field], locator)
+        self._rebuild_index(table_name, field, index)
         self._save_indexes_catalog()
         return kind
+
+    def _rebuild_index(self, table_name: str, field: str, index: Any) -> None:
+        """Rebuild an index from live rows, discarding any persisted LSM runs."""
+        reset = getattr(index, "reset", None)
+        if reset is not None:
+            reset()
+        for locator, record in self.tables[table_name].iter_records():
+            index.insert(record[field], locator)
 
     def _save_indexes_catalog(self) -> None:
         items = []
@@ -166,10 +172,7 @@ class SmartRetailDB:
             if table_name not in self.tables or field not in self.tables[table_name].fields:
                 continue
             _, index = self.index_manager.create(table_name, field, kind)
-            if isinstance(index, LSMTree) and index.runs:
-                continue
-            for locator, record in self.tables[table_name].iter_records():
-                index.insert(record[field], locator)
+            self._rebuild_index(table_name, field, index)
 
     @staticmethod
     def _safe_get_record(table: StorageTable, locator: tuple[int, int]) -> dict[str, Any] | None:

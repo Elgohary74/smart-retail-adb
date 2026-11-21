@@ -73,9 +73,25 @@ class LSMTree:
 
     def insert(self, key: Any, value: Any) -> None:
         # Locators are tuples; JSON turns them into lists, restored on load.
-        self.memtable.setdefault(key, []).append(value)
+        # Re-inserting a previously tombstoned pair must replace it, not duplicate it.
+        normalized = _normalize_locator(value)
+        self._tombstones.discard((key, normalized))
+        bucket = self.memtable.setdefault(key, [])
+        bucket[:] = [item for item in bucket if _normalize_locator(item) != normalized]
+        bucket.append(value)
         if len(self.memtable) >= self.flush_threshold:
             self.flush()
+
+    def reset(self) -> None:
+        """Discard persisted runs and tombstones so the index can be rebuilt."""
+        for _, _, path in self.runs:
+            path.unlink(missing_ok=True)
+        self.runs.clear()
+        self.memtable.clear()
+        self._tombstones.clear()
+        self.tombstone_path.unlink(missing_ok=True)
+        self.flushes = 0
+        self.compactions = 0
 
     def remove(self, key: Any, value: Any) -> bool:
         """Tombstone a locator and append it to the durable tombstone log."""
@@ -124,7 +140,7 @@ class LSMTree:
             pos = bisect_left(keys, key)
             if pos < len(keys) and keys[pos] == key:
                 found.extend(v for v in values[pos] if not self._is_tombstoned(key, v))
-        return found
+        return self._unique_locators(found)
 
     def range_search(self, low: Any | None = None, high: Any | None = None) -> list[tuple[Any, Any]]:
         items: list[tuple[Any, Any]] = []
@@ -135,8 +151,26 @@ class LSMTree:
             for key, bucket in zip(keys, values):
                 if (low is None or key >= low) and (high is None or key <= high):
                     items.extend((key, value) for value in bucket if not self._is_tombstoned(key, value))
-        items.sort(key=lambda item: item[0])
-        return items
+        unique: list[tuple[Any, Any]] = []
+        seen: set[tuple[Any, tuple[Any, ...]]] = set()
+        for key, value in items:
+            marker = (key, _normalize_locator(value))
+            if marker not in seen:
+                seen.add(marker)
+                unique.append((key, value))
+        unique.sort(key=lambda item: item[0])
+        return unique
+
+    @staticmethod
+    def _unique_locators(values: list[Any]) -> list[Any]:
+        seen: set[tuple[Any, ...]] = set()
+        unique: list[Any] = []
+        for value in values:
+            marker = _normalize_locator(value)
+            if marker not in seen:
+                seen.add(marker)
+                unique.append(value)
+        return unique
 
     def compact(self) -> None:
         if len(self.runs) < 2:
