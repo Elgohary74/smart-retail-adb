@@ -85,6 +85,69 @@ Use `--backend objects` to store every table, column, B+ Tree, and LSM SSTable p
 | Index Creation | `CREATE INDEX ON Products (price) USING BPLUS;` or `USING AUTO READS 100 WRITES 10;` |
 | Shell Meta-Commands | `:explain <SELECT ...>`, `:stats`, `:tables`, `:help`, `:quit` |
 
+### Example Interactive Session
+
+```text
+Smart Retail DB | :help for commands | :quit to exit
+smartdb> CREATE TABLE Products (product_id INT, name STR, category STR, price FLOAT, stock INT) LAYOUT ROW;
+Created table Products
+smartdb> INSERT INTO Products VALUES (1, 'Keyboard', 'Accessories', 29.99, 20);
+(1 row(s) affected)
+smartdb> INSERT INTO Products VALUES (2, 'Mouse', 'Accessories', 15.50, 35);
+(1 row(s) affected)
+smartdb> CREATE INDEX ON Products (price) USING AUTO READS 100 WRITES 10;
+Created BPLUS index on Products.price
+smartdb> :explain SELECT product_id, name FROM Products WHERE price BETWEEN 10.0 AND 30.0;
+INDEX RANGE SCAN BPLUS ON Products.price [cols=product_id,name]
+smartdb> SELECT product_id, name FROM Products WHERE price BETWEEN 10.0 AND 30.0;
+{'product_id': 2, 'name': 'Mouse'}
+{'product_id': 1, 'name': 'Keyboard'}
+(2 row(s))
+smartdb> UPDATE Products SET stock = 19 WHERE product_id = 1;
+(1 row(s) affected)
+smartdb> :tables
+['Products']
+smartdb> :stats
+{'policy': 'LRU', 'capacity': 64, 'hits': 18, 'misses': 0, 'hit_rate': 1.0, 'disk_reads': 0, 'disk_writes': 0, 'evictions': 0, 'dirty_evictions': 0}
+smartdb> :quit
+```
+
+---
+
+## Running Tests
+
+Run the full automated suite (41 tests across 9 modules):
+
+```bash
+# Linux / macOS
+PYTHONPATH=src python -m unittest discover -s tests -v
+
+# Also verify behavior with assertions disabled (-O)
+PYTHONPATH=src python -O -m unittest discover -s tests -v
+
+# Run a single module or individual test method
+PYTHONPATH=src python -m unittest tests.test_bplus_tree -v
+PYTHONPATH=src python -m unittest tests.test_engine.EngineTests.test_full_sql_dml_projection_range_and_reopen -v
+```
+
+```powershell
+# Windows (PowerShell)
+$env:PYTHONPATH = "src"
+python -m unittest discover -s tests -v
+```
+
+| Test Module | What It Verifies |
+| :--- | :--- |
+| [test_config.py](tests/test_config.py) | Central constants, `.env` parsing, precedence, and invalid config validation |
+| [test_schema.py](tests/test_schema.py) | `DataType`, `bool`/`int` isolation, `encode_key`/`decode_key`, row projection codecs |
+| [test_storage_backends.py](tests/test_storage_backends.py) | `PageFile`, `LocalObjectStore`, `StorageManager`, AES-256-GCM tamper checks |
+| [test_buffer_pool.py](tests/test_buffer_pool.py) | `FIFO`/`LRU` eviction, pin/unpin guard, `new_page`, WAL-LSN flush guard |
+| [test_row_table.py](tests/test_row_table.py) | `SlottedPage`, stable slots, in-place/relocating updates, `OVERFLOW` chains |
+| [test_column_table.py](tests/test_column_table.py) | Per-column streams, projection pushdown, deleted bitmap, `scan_batches` |
+| [test_bplus_tree.py](tests/test_bplus_tree.py) | Splits, leaf links, duplicate RID overflow/reclamation, reopen without table scan |
+| [test_lsm_tree.py](tests/test_lsm_tree.py) | Memtable WAL recovery, `BloomFilter`, tombstone compaction, `destroy()`, AES-GCM |
+| [test_engine.py](tests/test_engine.py) | End-to-end SQL/DML, `NULL` logic, auto index switching, crash reconciliation |
+
 ---
 
 ## Python API Quick Example
@@ -183,7 +246,7 @@ src/smartdb/
       sstable.py            # Immutable SSTable run page writer/reader
       wal.py                # Buffered framed Write-Ahead Log for memtable durability
       tree.py               # Disk-backed SSTable LSM Tree (compaction & tombstones)
-tests/                      # 41 unit & integration tests (8 test modules)
+tests/                      # 41 unit & integration tests (9 test modules)
 benchmarks/                 # Reproducible M1/M2 benchmark harness & plotting
 workloads/                  # Deterministic Retail Orders data generator
 docs/
