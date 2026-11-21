@@ -19,7 +19,7 @@ class StorageManager:
         backend_kind: str = DEFAULT_BACKEND_KIND,
         crypto: CryptoHooks | None = None,
         physical_page_size: int = PAGE_SIZE,
-    ):
+    ) -> None:
         if backend_kind not in {"page", "objects"}:
             raise ValueError("backend_kind must be 'page' or 'objects'")
         self.root = Path(root)

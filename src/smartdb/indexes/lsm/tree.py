@@ -57,7 +57,7 @@ class LSMTree:
         pool: BufferPool | None = None,
         name_prefix: str = "lsm",
         key_dtype: DataType = DataType.ANY,
-    ):
+    ) -> None:
         if flush_threshold < 1 or compaction_threshold < 2:
             raise ValueError("flush_threshold must be >= 1 and compaction_threshold >= 2")
         self.directory = Path(directory)
@@ -276,5 +276,5 @@ class LSMTree:
     def __enter__(self) -> "LSMTree":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self.close()

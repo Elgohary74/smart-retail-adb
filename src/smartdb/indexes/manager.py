@@ -51,7 +51,7 @@ class IndexManager:
         pool: BufferPool,
         lsm_flush_threshold: int = LSM_FLUSH_THRESHOLD,
         lsm_compaction_threshold: int = LSM_COMPACTION_THRESHOLD,
-    ):
+    ) -> None:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.storage_manager = storage_manager

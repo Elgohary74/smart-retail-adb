@@ -37,7 +37,7 @@ class BPlusTree:
         pool: BufferPool | None = None,
         name: str = "bplus",
         key_dtype: DataType = DataType.ANY,
-    ):
+    ) -> None:
         if order is not None and order < 3:
             raise ValueError("order must be at least 3")
         self.key_dtype = key_dtype
@@ -267,5 +267,5 @@ class BPlusTree:
     def __enter__(self) -> "BPlusTree":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self.close()

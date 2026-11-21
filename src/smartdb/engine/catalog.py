@@ -11,7 +11,7 @@ from ..core import atomic_write_json
 class CatalogStore:
     """Loads and atomically persists catalog.json and indexes.json."""
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path) -> None:
         self.catalog_path = directory / "catalog.json"
         self.index_catalog_path = directory / "indexes.json"
         self.schemas: dict[str, dict[str, Any]] = {}

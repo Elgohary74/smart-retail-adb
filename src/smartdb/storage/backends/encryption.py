@@ -38,7 +38,7 @@ class TransformingBackend:
         encrypt: PageTransform | None = None,
         decrypt: PageTransform | None = None,
         overhead_bytes: int = 0,
-    ):
+    ) -> None:
         if (encrypt is None) != (decrypt is None):
             raise ValueError("Provide both encrypt and decrypt hooks, or neither")
         if overhead_bytes < 0 or overhead_bytes >= backend.usable_page_size:

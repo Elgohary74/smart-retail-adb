@@ -50,7 +50,7 @@ class BufferPool:
         policy: str = DEFAULT_REPLACEMENT_POLICY,
         storage_manager: StorageManager | None = None,
         wal_flushed_lsn_fn: Callable[[], int] | None = None,
-    ):
+    ) -> None:
         if capacity < 1:
             raise ValueError("capacity must be at least 1")
         policy = policy.upper()

@@ -46,7 +46,7 @@ class SmartRetailDB:
         replacement_policy: str | None = None,
         backend_kind: str | None = None,
         crypto: CryptoHooks | None = None,
-    ):
+    ) -> None:
         settings = load_settings()
         self.directory = Path(directory if directory is not None else settings.db_dir)
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -282,5 +282,5 @@ class SmartRetailDB:
     def __enter__(self) -> "SmartRetailDB":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self.close()

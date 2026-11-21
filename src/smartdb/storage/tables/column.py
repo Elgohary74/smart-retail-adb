@@ -8,7 +8,7 @@ from typing import Any, Callable, Iterator
 from ..backends import PageBackend, StorageManager
 from ..buffer_pool import BufferPool
 from ..pages import HEADER_SIZE, PageHeader, PageType, SlottedPage, read_header, write_header
-from ...core import RID, TableSchema
+from ...core import RID, ColumnSpec, TableSchema
 from .base import scan_records
 from .column_codec import (
     ColumnStream,
@@ -29,7 +29,7 @@ from .column_codec import (
 class ColumnTable:
     """Columnar table storing one PageBackend stream per column + deleted bitmap."""
 
-    def __init__(self, storage_manager: StorageManager, pool: BufferPool, name: str, schema: TableSchema):
+    def __init__(self, storage_manager: StorageManager, pool: BufferPool, name: str, schema: TableSchema) -> None:
         self.storage_manager, self.pool, self.name, self.schema = storage_manager, pool, name, schema
         self.fields = schema.field_names
         usable = storage_manager.usable_page_size
@@ -57,7 +57,7 @@ class ColumnTable:
                 starts.append(read_header(frame.data).prev_page)
         return starts
 
-    def _open_column_stream(self, col, usable: int) -> ColumnStream:
+    def _open_column_stream(self, col: ColumnSpec, usable: int) -> ColumnStream:
         fid, backend = self.storage_manager.open_file(
             f"table:{self.name}:col:{col.name}", f"tables/{self.name}.col_{col.name}.pages"
         )

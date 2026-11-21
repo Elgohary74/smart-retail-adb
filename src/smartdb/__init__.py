@@ -1,10 +1,12 @@
 """Smart Retail DB package."""
 from __future__ import annotations
 
+from typing import Any
+
 __all__ = ["SmartRetailDB", "PAGE_SIZE", "PageFile", "BufferPool", "BPlusTree", "LSMTree", "choose_index_type"]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name == "SmartRetailDB":
         from .engine import SmartRetailDB
         return SmartRetailDB

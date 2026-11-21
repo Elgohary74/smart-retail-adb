@@ -14,7 +14,7 @@ _HDR_SIZE = struct.calcsize(_HDR_STRUCT)
 class BloomFilter:
     """Bitset Bloom filter for fast negative SSTable pruning."""
 
-    def __init__(self, num_bits: int = BLOOM_DEFAULT_BITS, num_hashes: int = BLOOM_NUM_HASHES, bits: bytearray | None = None):
+    def __init__(self, num_bits: int = BLOOM_DEFAULT_BITS, num_hashes: int = BLOOM_NUM_HASHES, bits: bytearray | None = None) -> None:
         self.num_bits = max(64, num_bits)
         self.num_hashes = max(1, num_hashes)
         expected_bytes = (self.num_bits + 7) // 8

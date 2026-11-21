@@ -18,7 +18,7 @@ _WAL_OP_SIZE = struct.calcsize(_WAL_OP_STRUCT)
 class LSMWal:
     """Appends, replays, truncates, and deletes encrypted or plain memtable ops."""
 
-    def __init__(self, path: Path, storage_manager: StorageManager):
+    def __init__(self, path: Path, storage_manager: StorageManager) -> None:
         self.path = path
         self.storage_manager = storage_manager
         self._file = self.path.open("ab")

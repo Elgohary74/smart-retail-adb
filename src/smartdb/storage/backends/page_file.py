@@ -9,7 +9,7 @@ from ...core.config import PAGE_SIZE
 class PageFile:
     """A contiguous file of fixed-size pages. Page IDs start at zero."""
 
-    def __init__(self, path: str | Path, page_size: int = PAGE_SIZE):
+    def __init__(self, path: str | Path, page_size: int = PAGE_SIZE) -> None:
         if page_size <= 0:
             raise ValueError("page_size must be positive")
         self.path = Path(path)
@@ -77,5 +77,5 @@ class PageFile:
     def __enter__(self) -> "PageFile":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self.close()

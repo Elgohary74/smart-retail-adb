@@ -112,7 +112,7 @@ def _raise_type(col: ColumnSpec, expected: str, value: Any) -> Any:
 class TableSchema:
     """Ordered list of ColumnSpecs with record validation and literal coercion."""
 
-    def __init__(self, columns: list[ColumnSpec]):
+    def __init__(self, columns: list[ColumnSpec]) -> None:
         if not columns:
             raise ValueError("TableSchema requires at least one column")
         names = [c.name for c in columns]
@@ -133,9 +133,7 @@ class TableSchema:
                     dt, dim = DataType.parse(str(raw))
                     cols.append(ColumnSpec(name, dtype=dt, dim=dim))
             return cls(cols)
-        if spec and isinstance(spec[0], ColumnSpec):
-            return cls(list(spec))  # type: ignore[arg-type]
-        return cls([ColumnSpec(name=str(name), dtype=DataType.ANY) for name in spec])
+        return cls([item if isinstance(item, ColumnSpec) else ColumnSpec(name=str(item), dtype=DataType.ANY) for item in spec])
 
     def to_dict(self) -> dict[str, Any]:
         return {"columns": [c.to_dict() for c in self.columns]}

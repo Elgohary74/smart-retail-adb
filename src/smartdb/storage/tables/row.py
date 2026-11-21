@@ -23,7 +23,7 @@ from .base import scan_records
 class RowTable:
     """Slotted-page heap table with stable (page_id, slot_id) RIDs and overflow."""
 
-    def __init__(self, storage_manager: StorageManager, pool: BufferPool, name: str, schema: TableSchema):
+    def __init__(self, storage_manager: StorageManager, pool: BufferPool, name: str, schema: TableSchema) -> None:
         self.storage_manager = storage_manager
         self.pool = pool
         self.name = name
