@@ -8,7 +8,8 @@ from typing import Any, Callable, Iterator
 from ..backends import PageBackend, StorageManager
 from ..buffer_pool import BufferPool
 from ..pages import HEADER_SIZE, PageHeader, PageType, SlottedPage, read_header, write_header
-from ...core import RID, TableSchema, deserialize_value
+from ...core import RID, TableSchema
+from .base import scan_records
 from .column_codec import (
     ColumnStream,
     append_fixed,
@@ -17,6 +18,7 @@ from .column_codec import (
     fixed_elem_size,
     fixed_slots_per_page,
     is_deleted_bit,
+    read_fixed_cell,
     read_fixed_slice,
     read_live_rowids,
     read_var_slice,
@@ -104,13 +106,9 @@ class ColumnTable:
 
     def _read_cell(self, stream: ColumnStream, rowid: int) -> Any:
         if stream.fixed_spec is not None:
-            elem_size, spp, bmap_len = stream.fixed_spec
+            _, spp, _ = stream.fixed_spec
             with self.pool.pin_page(rowid // spp, file_id=stream.file_id) as frame:
-                slot = rowid % spp
-                if frame.data[HEADER_SIZE + (slot // 8)] & (1 << (slot % 8)):
-                    return None
-                off = HEADER_SIZE + bmap_len + slot * elem_size
-                return deserialize_value(stream.col.dtype, frame.data, off, stream.col.dim)[0]
+                return read_fixed_cell(frame.data, stream.col, stream.fixed_spec, rowid)
         pid = bisect.bisect_right(stream.var_starts, rowid) - 1
         with self.pool.pin_page(pid, file_id=stream.file_id) as frame:
             payload = SlottedPage.get_payload(frame.data, rowid - stream.var_starts[pid])
@@ -118,11 +116,17 @@ class ColumnTable:
             raise IOError(f"Corrupt COL_VAR page {pid}: missing slot for rowid {rowid}")
         return decode_var_payload(self.pool, self._ovf_fid, stream.col, payload)
 
-    def try_get_record(self, rid: RID, fields: list[str] | None = None) -> dict[str, Any] | None:
+    def _live_rowid(self, rid: RID) -> int | None:
         chunk_id, rowid = int(rid[0]), int(rid[1])
         if chunk_id != 0 or rowid < 0 or rowid >= self._row_count:
             return None
         if is_deleted_bit(self.pool, self._del_fid, self._del_backend, self._bits_per_page, rowid):
+            return None
+        return rowid
+
+    def try_get_record(self, rid: RID, fields: list[str] | None = None) -> dict[str, Any] | None:
+        rowid = self._live_rowid(rid)
+        if rowid is None:
             return None
         cols = [self.schema.column(f) for f in fields] if fields is not None else self.schema.columns
         return {col.name: self._read_cell(self._streams[col.name], rowid) for col in cols}
@@ -134,10 +138,8 @@ class ColumnTable:
         return rec
 
     def delete(self, rid: RID) -> bool:
-        chunk_id, rowid = int(rid[0]), int(rid[1])
-        if chunk_id != 0 or rowid < 0 or rowid >= self._row_count:
-            return False
-        if is_deleted_bit(self.pool, self._del_fid, self._del_backend, self._bits_per_page, rowid):
+        rowid = self._live_rowid(rid)
+        if rowid is None:
             return False
         set_deleted_bit(self.pool, self._del_fid, self._del_backend, self._bits_per_page, rowid, True)
         return True
@@ -178,11 +180,7 @@ class ColumnTable:
     def scan(
         self, fields: list[str] | None = None, predicate: Callable[[dict[str, Any]], bool] | None = None
     ) -> list[dict[str, Any]]:
-        return [
-            (rec if fields is None else {f: rec[f] for f in fields})
-            for _, rec in self.iter_records(fields=fields if predicate is None else None)
-            if predicate is None or predicate(rec)
-        ]
+        return scan_records(self.iter_records, fields, predicate)
 
     def flush(self) -> None:
         for fid in (self._meta_fid, self._del_fid, self._ovf_fid, *(s.file_id for s in self._streams.values())):

@@ -1,9 +1,11 @@
 """Central engine constants and pure-stdlib .env / environment settings."""
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # --- Engine constants ---
 PAGE_SIZE = 4096
@@ -93,3 +95,10 @@ def load_settings(env_path: str | Path = ".env") -> Settings:
             bench_repeats=int(get("SMARTDB_BENCH_REPEATS", str(DEFAULT_BENCH_REPEATS))),
         )
     )
+
+
+def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Persist JSON atomically via a temporary file and os.replace."""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp, path)

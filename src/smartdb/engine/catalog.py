@@ -2,15 +2,10 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
-
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+from ..core import atomic_write_json
 
 
 class CatalogStore:
@@ -37,7 +32,7 @@ class CatalogStore:
         for name, stats in self.table_stats.items():
             if name in self.schemas:
                 self.schemas[name]["stats"] = stats
-        _atomic_write_json(self.catalog_path, {"clean_shutdown": clean_shutdown, "tables": self.schemas})
+        atomic_write_json(self.catalog_path, {"clean_shutdown": clean_shutdown, "tables": self.schemas})
 
     def load_indexes(self) -> list[dict[str, str]]:
         if not self.index_catalog_path.exists():
@@ -46,4 +41,4 @@ class CatalogStore:
 
     def save_indexes(self, entries: list[tuple[str, str, str]]) -> None:
         items = [{"table": t, "field": f, "type": kind} for t, f, kind in entries]
-        _atomic_write_json(self.index_catalog_path, {"indexes": items})
+        atomic_write_json(self.index_catalog_path, {"indexes": items})

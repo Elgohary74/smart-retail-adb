@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
-import os
-from bisect import bisect_left, bisect_right
+from bisect import bisect_left
+from operator import itemgetter
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,7 @@ from ...core import (
     LSM_FLUSH_THRESHOLD,
     RID,
     DataType,
+    atomic_write_json,
     decode_key,
     encode_key,
 )
@@ -22,6 +23,7 @@ from .sstable import OpList, SSTableRun, read_sstable_meta, read_sstable_page, w
 from .wal import LSMWal
 
 __all__ = ["BloomFilter", "LSMTree"]
+_KEY_0 = itemgetter(0)
 
 
 def _resolve_ops(ops: OpList) -> list[RID]:
@@ -108,14 +110,14 @@ class LSMTree:
         return f"{prefix}{self.name_prefix}_run_{run_id:08d}.sst"
 
     def _save_manifest(self) -> None:
-        data = {
-            "next_run_id": self._next_run_id,
-            "next_seq": self._next_seq,
-            "runs": [{"run_id": r.run_id, "logical_name": r.logical_name, "meta_pid": r.data_pages} for r in self.runs],
-        }
-        tmp = self.manifest_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.replace(tmp, self.manifest_path)
+        atomic_write_json(
+            self.manifest_path,
+            {
+                "next_run_id": self._next_run_id,
+                "next_seq": self._next_seq,
+                "runs": [{"run_id": r.run_id, "logical_name": r.logical_name, "meta_pid": r.data_pages} for r in self.runs],
+            },
+        )
 
     def _load_manifest(self) -> None:
         if not self.manifest_path.exists():
@@ -210,7 +212,7 @@ class LSMTree:
                 continue
             for pid in range(_start_page_for_key(run, kb), run.data_pages):
                 entries = read_sstable_page(self.pool, run.file_id, pid)
-                pos = bisect_left([e[0] for e in entries], kb)
+                pos = bisect_left(entries, kb, key=_KEY_0)
                 while pos < len(entries) and entries[pos][0] == kb:
                     ops.extend(entries[pos][1])
                     pos += 1

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 from bisect import bisect_left, bisect_right
+from operator import itemgetter
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,6 +27,8 @@ from .pages import (
 
 class BPlusTree:
     """Page-backed B+ Tree supporting equality, range, delete, and duplicate RID buckets."""
+
+    _KEY_0 = itemgetter(0)
 
     def __init__(
         self,
@@ -132,7 +135,7 @@ class BPlusTree:
     def _insert_into_leaf(self, pid: int, key_bytes: bytes, rid: RID) -> tuple[bytes, int] | None:
         with self.pool.pin_page(pid, file_id=self._file_id) as frame:
             entries, hdr = read_leaf(frame.data)
-        pos = bisect_left([e[0] for e in entries], key_bytes)
+        pos = bisect_left(entries, key_bytes, key=self._KEY_0)
         if pos < len(entries) and entries[pos][0] == key_bytes:
             k, rids, bpid = entries[pos]
             if bpid == -1 and len(rids) < BPLUS_INLINE_RID_CAP:
@@ -183,7 +186,7 @@ class BPlusTree:
         kb = encode_key(self.key_dtype, key)
         with self.pool.pin_page(self._find_leaf(kb), file_id=self._file_id) as frame:
             entries, _ = read_leaf(frame.data)
-        pos = bisect_left([e[0] for e in entries], kb)
+        pos = bisect_left(entries, kb, key=self._KEY_0)
         if pos < len(entries) and entries[pos][0] == kb:
             return self._all_rids(entries[pos][1], entries[pos][2])
         return []
@@ -194,7 +197,7 @@ class BPlusTree:
         leaf_pid = self._find_leaf(kb)
         with self.pool.pin_page(leaf_pid, file_id=self._file_id) as frame:
             entries, hdr = read_leaf(frame.data)
-        pos = bisect_left([e[0] for e in entries], kb)
+        pos = bisect_left(entries, kb, key=self._KEY_0)
         if pos >= len(entries) or entries[pos][0] != kb:
             return 0
         k, rids, bpid = entries[pos]
@@ -228,8 +231,9 @@ class BPlusTree:
             with self.pool.pin_page(leaf_pid, file_id=self._file_id) as frame:
                 entries, hdr = read_leaf(frame.data)
                 leaf_pid = hdr.next_page
-            keys = [e[0] for e in entries]
-            start = 0 if low_b is None else (bisect_left(keys, low_b) if include_low else bisect_right(keys, low_b))
+            start = 0 if low_b is None else (
+                bisect_left(entries, low_b, key=self._KEY_0) if include_low else bisect_right(entries, low_b, key=self._KEY_0)
+            )
             for kb, inline, bpid in entries[start:]:
                 if high_b is not None and (kb > high_b or (not include_high and kb == high_b)):
                     return found

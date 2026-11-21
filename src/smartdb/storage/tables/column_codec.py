@@ -157,7 +157,7 @@ def decode_var_payload(pool: BufferPool, ovf_fid: int, col: ColumnSpec, payload:
     return deserialize_value(col.dtype, payload, 1, col.dim)[0]
 
 
-def _read_fixed_cell(buf: bytearray, col: ColumnSpec, fixed_spec: tuple[int, int, int], rowid: int) -> Any:
+def read_fixed_cell(buf: bytearray, col: ColumnSpec, fixed_spec: tuple[int, int, int], rowid: int) -> Any:
     elem_size, spp, bmap_len = fixed_spec
     slot = rowid % spp
     if buf[HEADER_SIZE + (slot // 8)] & (1 << (slot % 8)):
@@ -177,7 +177,7 @@ def read_fixed_slice(pool: BufferPool, stream: ColumnStream, rowids: list[int]) 
         while end < len(rowids) and rowids[end] // spp == pid:
             end += 1
         with pool.pin_page(pid, file_id=stream.file_id) as frame:
-            values.extend(_read_fixed_cell(frame.data, stream.col, stream.fixed_spec, rid) for rid in rowids[idx:end])
+            values.extend(read_fixed_cell(frame.data, stream.col, stream.fixed_spec, rid) for rid in rowids[idx:end])
         idx = end
     return values
 

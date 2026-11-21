@@ -17,6 +17,7 @@ from ..pages import (
     unpack_overflow_stub,
     write_overflow_chain,
 )
+from .base import scan_records
 
 
 class RowTable:
@@ -138,11 +139,7 @@ class RowTable:
         fields: list[str] | None = None,
         predicate: Callable[[dict[str, Any]], bool] | None = None,
     ) -> list[dict[str, Any]]:
-        return [
-            (rec if fields is None else {f: rec[f] for f in fields})
-            for _, rec in self.iter_records(fields=fields if predicate is None else None)
-            if predicate is None or predicate(rec)
-        ]
+        return scan_records(self.iter_records, fields, predicate)
 
     def scan_batches(
         self,

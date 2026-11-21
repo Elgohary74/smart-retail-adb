@@ -30,3 +30,16 @@ class TableStorage(Protocol):
     @property
     def page_count(self) -> int: ...
     def flush(self) -> None: ...
+
+
+def scan_records(
+    iter_records: Callable[[list[str] | None], Iterator[tuple[RID, dict[str, Any]]]],
+    fields: list[str] | None = None,
+    predicate: Callable[[dict[str, Any]], bool] | None = None,
+) -> list[dict[str, Any]]:
+    """Shared scan projection/filtering helper over a table's iter_records() stream."""
+    return [
+        (rec if fields is None else {f: rec[f] for f in fields})
+        for _, rec in iter_records(fields if predicate is None else None)
+        if predicate is None or predicate(rec)
+    ]

@@ -20,6 +20,7 @@ from .config import (
     LSM_FLUSH_THRESHOLD,
     PAGE_SIZE,
     Settings,
+    atomic_write_json,
     load_env,
     load_settings,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "DEFAULT_BENCH_WARMUP",
     "DEFAULT_BENCH_OUT_DIR",
     "Settings",
+    "atomic_write_json",
     "load_env",
     "load_settings",
     "RID",
