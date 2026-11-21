@@ -13,18 +13,18 @@ A custom educational relational and vector-capable database management system im
 ## Implemented Milestones
 
 ### Milestone 1 — Storage Engine Foundation
-- **Persistent Page Backends:** Fixed `4,096`-byte physical pages via contiguous files ([page_file.py](src/smartdb/storage/backends/page_file.py)) or one-object-per-page directories ([object_store.py](src/smartdb/storage/backends/object_store.py)) behind a shared `PageBackend` protocol and `StorageManager`.
+- **Persistent Page Backends:** Fixed `4,096`-byte physical pages via contiguous files ([page_file.py](src/smartdb/storage/backends/page_file.py)) or one-object-per-page directories ([object_store.py](src/smartdb/storage/backends/object_store.py)) implementing the shared `PageBackend` protocol ([base.py](src/smartdb/storage/backends/base.py)) under `StorageManager`.
 - **Shared Database-Wide Buffer Pool:** Single `BufferPool` ([buffer_pool.py](src/smartdb/storage/buffer_pool.py)) caching `(file_id, page_id)` frames across all tables and indexes with configurable `LRU`/`FIFO` eviction, `pin_page`/`unpin_page`, dirty write-back, WAL-LSN flush guard hook, `usable_page_size()`, and hit/miss/I/O counters.
-- **Typed Schemas & Binary Layouts:** [schema.py](src/smartdb/core/schema.py) supports `INT`, `FLOAT`, `BOOL`, `STR`, `BYTES`, `VECTOR(D)`, and `ANY` with strict `bool` vs. `int` separation and lossless order-preserving key encoding.
-  - **`RowTable`** ([row.py](src/smartdb/storage/tables/row.py)): Binary slotted pages (`(page_id, slot_id)` RIDs) with stable slots, in-place/relocating updates, tombstones, and linked `OVERFLOW` pages for records >4 KB (including large embeddings).
+- **Typed Schemas & Binary Layouts:** Core types ([types.py](src/smartdb/core/types.py)) and schemas ([schema.py](src/smartdb/core/schema.py)) support `INT`, `FLOAT`, `BOOL`, `STR`, `BYTES`, `VECTOR(D)`, and `ANY` with strict `bool` vs. `int` separation and lossless order-preserving key encoding.
+  - **`RowTable`** ([row.py](src/smartdb/storage/tables/row.py)): Implements `TableStorage` ([tables/base.py](src/smartdb/storage/tables/base.py)) using binary slotted pages (`(page_id, slot_id)` RIDs) with stable slots, in-place/relocating updates, tombstones, and linked `OVERFLOW` pages for records >4 KB (including large embeddings).
   - **`ColumnTable`** ([column.py](src/smartdb/storage/tables/column.py)): Dedicated per-column page streams + deleted-row bitmap supporting column projection pushdown, late materialization, and vectorized `scan_batches`.
 
 ### Milestone 2 — Advanced Indexing System
-- **Page-Backed B+ Tree** ([tree.py](src/smartdb/indexes/bplus/tree.py)): Persistent `BPLUS_META`, `BPLUS_INTERNAL`, and doubly-linked `BPLUS_LEAF` pages inside `StorageManager` + `BufferPool`, supporting equality, inclusive/exclusive range scans, deletes, and overflow RID buckets for high-duplicate keys.
-- **Disk-Backed SSTable LSM Tree** ([tree.py](src/smartdb/indexes/lsm/tree.py)): Entry-count memtable + framed `memtable.wal`, immutable `LSM_DATA`/`LSM_META` SSTable runs stored in `StorageManager` + `BufferPool`, `blake2b` Bloom filters, sparse fence pointers, tombstone sequence resolution, and atomic manifest compaction.
-- **Workload-Driven Index Selection** ([manager.py](src/smartdb/indexes/manager.py)): `choose_index_type(reads, writes, range_reads)` uses observed table telemetry (`WorkloadProfile`) to pick `LSM` for write-heavy point workloads and `BPLUS` for read-heavy or range workloads.
+- **Page-Backed B+ Tree** ([tree.py](src/smartdb/indexes/bplus/tree.py)): Persistent `BPLUS_META`, `BPLUS_INTERNAL`, and doubly-linked `BPLUS_LEAF` pages inside `StorageManager` + `BufferPool` with page-type validation, equality, inclusive/exclusive range scans, and overflow RID buckets with empty-page reclamation ([buckets.py](src/smartdb/indexes/bplus/buckets.py)).
+- **Disk-Backed SSTable LSM Tree** ([tree.py](src/smartdb/indexes/lsm/tree.py)): Entry-count memtable + framed `memtable.wal` ([wal.py](src/smartdb/indexes/lsm/wal.py)), immutable `LSM_DATA`/`LSM_META` SSTable runs stored in `StorageManager` + `BufferPool`, validated `blake2b` Bloom filters, pre-indexed sparse fence pointers, tombstone sequence resolution, atomic manifest compaction, and full `destroy()` cleanup.
+- **Workload-Driven Index Selection** ([manager.py](src/smartdb/indexes/manager.py)): `choose_index_type(reads, writes, range_reads)` uses observed table telemetry (`WorkloadProfile`) to pick `LSM` for write-heavy point workloads and `BPLUS` for read-heavy or range workloads over a shared `IndexProtocol` ([indexes/base.py](src/smartdb/indexes/base.py)).
 - **Page-Aware Encryption Hooks** ([encryption.py](src/smartdb/storage/backends/encryption.py)): `TransformingBackend` wraps any backend with `(page_id, bytes) -> bytes` hooks and configurable `overhead_bytes`, configured via `CryptoHooks` and `make_aes_gcm_crypto(key)` (or raw-tuple `make_aes_gcm_hooks(key)`) for authenticated AES-256-GCM encryption on pages and WAL records.
-- **Safe Restricted SQL/DML Engine** ([parser.py](src/smartdb/query/parser.py), [db.py](src/smartdb/engine/db.py)): Parses literals via `ast.literal_eval` (rejecting SQL injection, expressions, and `NaN`/`Inf`) and enforces SQL three-valued `NULL` logic.
+- **Safe Restricted SQL/DML Engine** ([ast.py](src/smartdb/query/ast.py), [parser.py](src/smartdb/query/parser.py), [db.py](src/smartdb/engine/db.py)): Parses literals via `ast.literal_eval` (rejecting SQL injection, expressions, and `NaN`/`Inf`) and enforces SQL three-valued `NULL` logic.
 
 ---
 
@@ -173,7 +173,7 @@ src/smartdb/
       column.py             # Per-column ColumnTable (projection pushdown, vectorized batches)
   indexes/
     base.py                 # Shared IndexProtocol and key_in_range boundary helper
-    manager.py              # IndexManager & choose_index_type heuristic
+    manager.py              # IndexManager, WorkloadProfile & choose_index_type heuristic
     bplus/
       pages.py              # Binary B+ Tree meta/internal/leaf page codecs
       buckets.py            # Linked OVERFLOW RID-bucket pages for duplicate keys
