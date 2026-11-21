@@ -9,11 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from common import environment_metadata, run_repeated, save_bar_chart, write_csv
+from smartdb.core import ColumnSpec, DataType
 from smartdb.engine import SmartRetailDB
-from smartdb.schema import ColumnSpec, DataType
-from smartdb.storage.buffer_pool import BufferPool
-from smartdb.storage.encryption import make_aes_gcm_hooks
-from smartdb.storage.page_file import PAGE_SIZE, PageFile
+from smartdb.storage import PAGE_SIZE, BufferPool, PageFile, make_aes_gcm_hooks
 
 SCHEMA = [
     ColumnSpec("product_id", DataType.INT, nullable=False),

@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import CatalogStore
-from .indexes.manager import IndexManager
-from .predicates import matches_predicate
-from .query import (
+from ..core import RID, ColumnSpec, DataType, TableSchema
+from ..indexes import IndexManager
+from ..query import (
     CreateIndexStmt,
     CreateTableStmt,
     DeleteStmt,
@@ -15,14 +15,17 @@ from .query import (
     Predicate,
     SelectStmt,
     UpdateStmt,
+    matches_predicate,
     parse_sql,
 )
-from .schema import RID, ColumnSpec, DataType, TableSchema
-from .storage.buffer_pool import BufferPool
-from .storage.column_table import ColumnTable
-from .storage.encryption import PageTransform, RecordTransform
-from .storage.manager import StorageManager
-from .storage.row_table import RowTable, TableStorage
+from ..storage import (
+    BufferPool,
+    ColumnTable,
+    RowTable,
+    StorageManager,
+    TableStorage,
+)
+from ..storage.backends import PageTransform, RecordTransform
 
 
 class SmartRetailDB:

@@ -7,18 +7,18 @@ A custom educational relational and vector-capable database management system im
 ## Implemented Milestones
 
 ### Milestone 1 — Storage Engine Foundation
-- **Persistent Page Backends:** Fixed `4,096`-byte physical pages via contiguous files ([page_file.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/page_file.py)) or one-object-per-page directories ([object_store.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/object_store.py)) behind a shared `PageBackend` protocol and `StorageManager`.
+- **Persistent Page Backends:** Fixed `4,096`-byte physical pages via contiguous files ([page_file.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/backends/page_file.py)) or one-object-per-page directories ([object_store.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/backends/object_store.py)) behind a shared `PageBackend` protocol and `StorageManager`.
 - **Shared Database-Wide Buffer Pool:** Single `BufferPool` ([buffer_pool.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/buffer_pool.py)) caching `(file_id, page_id)` frames across all tables and indexes with configurable `LRU`/`FIFO` eviction, `pin_page`/`unpin_page`, dirty write-back, WAL-LSN flush guard hook, and hit/miss/I/O counters.
-- **Typed Schemas & Binary Layouts:** [schema.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/schema.py) supports `INT`, `FLOAT`, `BOOL`, `STR`, `BYTES`, `VECTOR(D)`, and `ANY` with strict `bool` vs. `int` separation and lossless order-preserving key encoding.
-  - **`RowTable`** ([row_table.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/row_table.py)): Binary slotted pages (`(page_id, slot_id)` RIDs) with stable slots, in-place/relocating updates, tombstones, and linked `OVERFLOW` pages for records >4 KB (including large embeddings).
-  - **`ColumnTable`** ([column_table.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/column_table.py)): Dedicated per-column page streams + deleted-row bitmap supporting column projection pushdown, late materialization, and vectorized `scan_batches`.
+- **Typed Schemas & Binary Layouts:** [schema.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/core/schema.py) supports `INT`, `FLOAT`, `BOOL`, `STR`, `BYTES`, `VECTOR(D)`, and `ANY` with strict `bool` vs. `int` separation and lossless order-preserving key encoding.
+  - **`RowTable`** ([row.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/tables/row.py)): Binary slotted pages (`(page_id, slot_id)` RIDs) with stable slots, in-place/relocating updates, tombstones, and linked `OVERFLOW` pages for records >4 KB (including large embeddings).
+  - **`ColumnTable`** ([column.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/tables/column.py)): Dedicated per-column page streams + deleted-row bitmap supporting column projection pushdown, late materialization, and vectorized `scan_batches`.
 
 ### Milestone 2 — Advanced Indexing System
-- **Page-Backed B+ Tree** ([bplus_tree.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/bplus_tree.py)): Persistent `BPLUS_META`, `BPLUS_INTERNAL`, and doubly-linked `BPLUS_LEAF` pages inside `StorageManager` + `BufferPool`, supporting equality, inclusive/exclusive range scans, deletes, and overflow RID buckets for high-duplicate keys.
-- **Disk-Backed SSTable LSM Tree** ([lsm_tree.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/lsm_tree.py)): Entry-count memtable + framed `memtable.wal`, immutable `LSM_DATA`/`LSM_META` SSTable runs stored in `StorageManager` + `BufferPool`, `blake2b` Bloom filters, sparse fence pointers, tombstone sequence resolution, and atomic manifest compaction.
+- **Page-Backed B+ Tree** ([tree.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/bplus/tree.py)): Persistent `BPLUS_META`, `BPLUS_INTERNAL`, and doubly-linked `BPLUS_LEAF` pages inside `StorageManager` + `BufferPool`, supporting equality, inclusive/exclusive range scans, deletes, and overflow RID buckets for high-duplicate keys.
+- **Disk-Backed SSTable LSM Tree** ([tree.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/lsm/tree.py)): Entry-count memtable + framed `memtable.wal`, immutable `LSM_DATA`/`LSM_META` SSTable runs stored in `StorageManager` + `BufferPool`, `blake2b` Bloom filters, sparse fence pointers, tombstone sequence resolution, and atomic manifest compaction.
 - **Workload-Driven Index Selection** ([manager.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/manager.py)): `choose_index_type(reads, writes, range_reads)` uses observed table telemetry (or explicit counts) to pick `LSM` for write-heavy point workloads and `BPLUS` for read-heavy or range workloads.
-- **Page-Aware Encryption Hooks** ([encryption.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/encryption.py)): `TransformingBackend` wraps any backend with `(page_id, bytes) -> bytes` hooks and configurable `overhead_bytes`, plus `make_aes_gcm_hooks(key)` for authenticated AES-256-GCM encryption on pages and WAL records.
-- **Safe Restricted SQL/DML Engine** ([query.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/query.py), [engine.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/engine.py)): Parses literals via `ast.literal_eval` (rejecting SQL injection, expressions, and `NaN`/`Inf`) and enforces SQL three-valued `NULL` logic.
+- **Page-Aware Encryption Hooks** ([encryption.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/backends/encryption.py)): `TransformingBackend` wraps any backend with `(page_id, bytes) -> bytes` hooks and configurable `overhead_bytes`, plus `make_aes_gcm_hooks(key)` for authenticated AES-256-GCM encryption on pages and WAL records.
+- **Safe Restricted SQL/DML Engine** ([parser.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/query/parser.py), [db.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/engine/db.py)): Parses literals via `ast.literal_eval` (rejecting SQL injection, expressions, and `NaN`/`Inf`) and enforces SQL three-valued `NULL` logic.
 
 ---
 
@@ -80,8 +80,8 @@ Use `--backend objects` to store every table, column, B+ Tree, and LSM SSTable p
 ## Python API Quick Example
 
 ```python
+from smartdb.core import ColumnSpec, DataType
 from smartdb.engine import SmartRetailDB
-from smartdb.schema import ColumnSpec, DataType
 
 with SmartRetailDB("./retail_demo", buffer_frames=64, replacement_policy="LRU") as db:
     db.create_table(
@@ -130,34 +130,42 @@ PYTHONPATH=src python benchmarks/benchmark_indexes.py --records 2000 --repeats 5
 
 ```text
 src/smartdb/
-  schema.py                 # Typed columns, TableSchema, and record validation
-  key_codec.py              # Lossless order-preserving key encoding/decoding
-  row_codec.py              # Binary value & row serialization with projection skip
-  catalog.py                # Atomic catalog.json & indexes.json persistence
-  predicates.py             # SQL three-valued predicate evaluation
-  engine.py                 # SmartRetailDB coordinator, DML/SELECT execution, crash reconciliation
-  query.py                  # Restricted safe SQL/DML/DDL parser
-  cli.py                    # Interactive REPL
+  cli.py                    # Interactive REPL entry point
+  core/
+    schema.py               # Typed columns, TableSchema, and record validation
+    key_codec.py            # Lossless order-preserving key encoding/decoding
+    row_codec.py            # Binary value & row serialization with projection skip
+  engine/
+    catalog.py              # Atomic catalog.json & indexes.json persistence
+    db.py                   # SmartRetailDB coordinator, DML/SELECT execution, reconciliation
+  query/
+    parser.py               # Restricted safe SQL/DML/DDL parser
+    predicates.py           # SQL three-valued predicate evaluation
   storage/
-    page_file.py            # PageBackend protocol & contiguous PageFile (4,096 B)
-    object_store.py         # LocalObjectStore (one .obj file per page, cached page count)
-    encryption.py           # TransformingBackend hooks & optional AES-256-GCM helper
-    manager.py              # StorageManager mapping logical files <-> file_id
     buffer_pool.py          # Shared multi-file BufferPool (LRU/FIFO, pin/unpin, LSN guard)
-    slotted_page.py         # 24-byte PageHeader, PageType enum, SlottedPage
-    overflow.py             # Linked OVERFLOW page chain reader/writer
-    row_table.py            # TableStorage protocol & slotted-page RowTable
-    column_codec.py         # Columnar bitmap and fixed/variable page codecs
-    column_table.py         # Per-column ColumnTable (projection pushdown, vectorized batches)
+    backends/
+      page_file.py          # PageBackend protocol & contiguous PageFile (4,096 B)
+      object_store.py       # LocalObjectStore (one .obj file per page, cached count)
+      encryption.py         # TransformingBackend hooks & optional AES-256-GCM helper
+      manager.py            # StorageManager mapping logical files <-> file_id
+    pages/
+      slotted.py            # 24-byte PageHeader, PageType enum, SlottedPage
+      overflow.py           # Linked OVERFLOW page chain reader/writer
+    tables/
+      row.py                # TableStorage protocol & slotted-page RowTable
+      column_codec.py       # Columnar bitmap and fixed/variable page codecs
+      column.py             # Per-column ColumnTable (projection pushdown, vectorized batches)
   indexes/
-    bplus_pages.py          # Binary B+ Tree meta/internal/leaf page codecs
-    rid_buckets.py          # Linked OVERFLOW RID-bucket pages for duplicate keys
-    bplus_tree.py           # Page-backed B+ Tree with leaf links & duplicate RID buckets
-    bloom.py                # Compact blake2b Bloom filter
-    sstable.py              # Immutable SSTable run page writer/reader
-    lsm_wal.py              # Buffered framed Write-Ahead Log for memtable durability
-    lsm_tree.py             # Disk-backed SSTable LSM Tree (compaction & tombstones)
     manager.py              # IndexManager & choose_index_type heuristic
+    bplus/
+      pages.py              # Binary B+ Tree meta/internal/leaf page codecs
+      buckets.py            # Linked OVERFLOW RID-bucket pages for duplicate keys
+      tree.py               # Page-backed B+ Tree with leaf links
+    lsm/
+      bloom.py              # Compact blake2b Bloom filter
+      sstable.py            # Immutable SSTable run page writer/reader
+      wal.py                # Buffered framed Write-Ahead Log for memtable durability
+      tree.py               # Disk-backed SSTable LSM Tree (compaction & tombstones)
 tests/                      # 36 unit & integration tests (8 test modules)
 benchmarks/                 # Reproducible M1/M2 benchmark harness & plotting
 workloads/                  # Deterministic Retail Orders data generator

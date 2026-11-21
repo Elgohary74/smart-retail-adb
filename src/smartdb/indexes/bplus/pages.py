@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import struct
 
-from ..schema import RID
-from ..storage.slotted_page import HEADER_SIZE, PageHeader, PageType, read_header, write_header
+from ...core import RID
+from ...storage.pages import HEADER_SIZE, PageHeader, PageType, read_header, write_header
 
 _META_STRUCT = "<iiii"
 _RID_STRUCT = "<II"

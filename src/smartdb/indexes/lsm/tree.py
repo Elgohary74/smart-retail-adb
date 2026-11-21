@@ -7,11 +7,10 @@ from bisect import bisect_left, bisect_right
 from pathlib import Path
 from typing import Any
 
-from ..schema import RID, DataType, decode_key, encode_key
-from ..storage.buffer_pool import BufferPool
-from ..storage.manager import StorageManager
+from ...core import RID, DataType, decode_key, encode_key
+from ...storage import BufferPool, StorageManager
 from .bloom import BloomFilter
-from .lsm_wal import LSMWal
+from .wal import LSMWal
 from .sstable import OpList, SSTableRun, read_sstable_meta, read_sstable_page, write_sstable_run
 
 __all__ = ["BloomFilter", "LSMTree"]

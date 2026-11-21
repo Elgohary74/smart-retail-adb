@@ -1,6 +1,6 @@
 import unittest
 
-from smartdb.schema import (
+from smartdb.core import (
     ColumnSpec,
     DataType,
     TableSchema,

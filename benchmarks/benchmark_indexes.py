@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from common import environment_metadata, run_repeated, save_bar_chart, write_csv
+from smartdb.core import ColumnSpec, DataType
 from smartdb.engine import SmartRetailDB
-from smartdb.schema import ColumnSpec, DataType
 
 SCHEMA = [
     ColumnSpec("product_id", DataType.INT, nullable=False),

@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .schema import ColumnSpec, DataType
+from ..core.schema import ColumnSpec, DataType
 
 _ID = r"[A-Za-z_][A-Za-z0-9_]*"
 _RE_SELECT = re.compile(rf"^\s*SELECT\s+(\*|{_ID}(?:\s*,\s*{_ID})*)\s+FROM\s+({_ID})(?:\s+WHERE\s+(.+?))?\s*;?\s*$", re.I | re.S)

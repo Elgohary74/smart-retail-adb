@@ -5,11 +5,10 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from ..schema import RID, DataType
-from ..storage.buffer_pool import BufferPool
-from ..storage.manager import StorageManager
-from .bplus_tree import BPlusTree
-from .lsm_tree import LSMTree
+from ..core import RID, DataType
+from ..storage import BufferPool, StorageManager
+from .bplus import BPlusTree
+from .lsm import LSMTree
 
 
 def choose_index_type(reads: int, writes: int, range_reads: int = 0) -> str:

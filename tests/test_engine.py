@@ -3,11 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from smartdb.core import ColumnSpec, DataType
 from smartdb.engine import SmartRetailDB
-from smartdb.indexes.manager import choose_index_type
+from smartdb.indexes import choose_index_type
 from smartdb.query import parse_sql
-from smartdb.schema import ColumnSpec, DataType
-from smartdb.storage.encryption import make_aes_gcm_hooks
+from smartdb.storage import make_aes_gcm_hooks
 
 
 class EngineTests(unittest.TestCase):

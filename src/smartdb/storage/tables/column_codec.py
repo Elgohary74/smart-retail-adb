@@ -5,10 +5,9 @@ import bisect
 import struct
 from typing import Any
 
-from ..schema import ColumnSpec, DataType, deserialize_value, serialize_value
-from .buffer_pool import BufferPool
-from .overflow import read_overflow_chain, write_overflow_chain
-from .slotted_page import HEADER_SIZE, PageHeader, PageType, SlottedPage, read_header, write_header
+from ...core import ColumnSpec, DataType, deserialize_value, serialize_value
+from ..buffer_pool import BufferPool
+from ..pages import HEADER_SIZE, PageHeader, PageType, SlottedPage, read_header, read_overflow_chain, write_header, write_overflow_chain
 
 _OVF_MAGIC = b"\xffOVF"
 _OVF_STUB_STRUCT = "<4sIi"

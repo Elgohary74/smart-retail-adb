@@ -2,8 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from smartdb.storage.buffer_pool import BufferPool
-from smartdb.storage.page_file import PAGE_SIZE, PageFile
+from smartdb.storage import PAGE_SIZE, BufferPool, PageFile
 
 
 class BufferPoolTests(unittest.TestCase):

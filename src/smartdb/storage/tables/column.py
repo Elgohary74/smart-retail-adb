@@ -5,8 +5,9 @@ import bisect
 import struct
 from typing import Any, Callable, Iterator
 
-from ..schema import RID, ColumnSpec, TableSchema, deserialize_value
-from .buffer_pool import BufferPool
+from ...core import RID, ColumnSpec, TableSchema, deserialize_value
+from ..backends import StorageManager
+from ..buffer_pool import BufferPool
 from .column_codec import (
     append_fixed,
     append_var,
@@ -19,8 +20,7 @@ from .column_codec import (
     read_var_slice,
     set_deleted_bit,
 )
-from .manager import StorageManager
-from .slotted_page import HEADER_SIZE, PageHeader, PageType, SlottedPage, read_header, write_header
+from ..pages import HEADER_SIZE, PageHeader, PageType, SlottedPage, read_header, write_header
 
 
 class ColumnTable:

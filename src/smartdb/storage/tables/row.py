@@ -4,11 +4,10 @@ from __future__ import annotations
 import struct
 from typing import Any, Callable, Iterator, Protocol
 
-from ..schema import RID, TableSchema, deserialize_row, serialize_row
-from .buffer_pool import BufferPool
-from .manager import StorageManager
-from .overflow import free_overflow_chain, read_overflow_chain, write_overflow_chain
-from .slotted_page import HEADER_SIZE, PageType, SlottedPage
+from ...core import RID, TableSchema, deserialize_row, serialize_row
+from ..backends import StorageManager
+from ..buffer_pool import BufferPool
+from ..pages import HEADER_SIZE, PageType, SlottedPage, free_overflow_chain, read_overflow_chain, write_overflow_chain
 
 _OVF_MAGIC = b"\xffOVF"
 _OVF_STUB_STRUCT = "<4sIi"

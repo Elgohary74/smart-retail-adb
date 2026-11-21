@@ -1,10 +1,14 @@
+from .backends import (
+    PAGE_SIZE,
+    LocalObjectStore,
+    PageBackend,
+    PageFile,
+    StorageManager,
+    TransformingBackend,
+    make_aes_gcm_hooks,
+)
 from .buffer_pool import BufferFrame, BufferPool, BufferStats
-from .column_table import ColumnTable
-from .encryption import TransformingBackend, make_aes_gcm_hooks
-from .manager import StorageManager
-from .object_store import LocalObjectStore
-from .page_file import PAGE_SIZE, PageBackend, PageFile
-from .row_table import RowTable, TableStorage
+from .tables import ColumnTable, RowTable, TableStorage
 
 __all__ = [
     "PAGE_SIZE",

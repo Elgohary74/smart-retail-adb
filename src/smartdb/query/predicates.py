@@ -4,8 +4,8 @@ from __future__ import annotations
 import operator
 from typing import Any
 
-from .query import Predicate
-from .schema import TableSchema
+from .parser import Predicate
+from ..core.schema import TableSchema
 
 _CMP_OPS = {
     "<": operator.lt,

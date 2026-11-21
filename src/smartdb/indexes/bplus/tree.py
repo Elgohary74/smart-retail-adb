@@ -6,11 +6,10 @@ from bisect import bisect_left, bisect_right
 from pathlib import Path
 from typing import Any
 
-from ..schema import RID, DataType, decode_key, encode_key
-from ..storage.buffer_pool import BufferPool
-from ..storage.manager import StorageManager
-from ..storage.slotted_page import HEADER_SIZE, PageType, read_header, write_header
-from .bplus_pages import (
+from ...core import RID, DataType, decode_key, encode_key
+from ...storage import BufferPool, StorageManager
+from ...storage.pages import HEADER_SIZE, PageType, read_header, write_header
+from .pages import (
     LeafEntry,
     read_internal,
     read_leaf,
@@ -21,7 +20,7 @@ from .bplus_pages import (
     write_leaf,
     write_meta,
 )
-from .rid_buckets import bucket_append, bucket_read, bucket_remove
+from .buckets import bucket_append, bucket_read, bucket_remove
 
 _INLINE_RID_CAP = 8
 

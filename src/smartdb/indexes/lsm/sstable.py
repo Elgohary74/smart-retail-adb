@@ -4,10 +4,9 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
-from ..schema import RID
-from ..storage.buffer_pool import BufferPool
-from ..storage.manager import StorageManager
-from ..storage.slotted_page import HEADER_SIZE, PageHeader, PageType, read_header, write_header
+from ...core import RID
+from ...storage import BufferPool, StorageManager
+from ...storage.pages import HEADER_SIZE, PageHeader, PageType, read_header, write_header
 from .bloom import BloomFilter
 
 OP_STRUCT = "<IIQB"

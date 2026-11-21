@@ -7,8 +7,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+from smartdb.core import ColumnSpec, DataType
 from smartdb.engine import SmartRetailDB
-from smartdb.schema import ColumnSpec, DataType
 
 PRODUCT_SCHEMA = [
     ColumnSpec("product_id", DataType.INT, nullable=False),

@@ -1,10 +1,8 @@
 import tempfile
 import unittest
 
-from smartdb.schema import ColumnSpec, DataType, TableSchema
-from smartdb.storage.buffer_pool import BufferPool
-from smartdb.storage.column_table import ColumnTable
-from smartdb.storage.manager import StorageManager
+from smartdb.core import ColumnSpec, DataType, TableSchema
+from smartdb.storage import BufferPool, ColumnTable, StorageManager
 
 
 class ColumnTableTests(unittest.TestCase):

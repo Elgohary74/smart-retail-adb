@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import struct
 
-from ..schema import RID
-from ..storage.buffer_pool import BufferPool
-from ..storage.slotted_page import HEADER_SIZE, PageHeader, PageType, read_header, write_header
+from ...core import RID
+from ...storage import BufferPool
+from ...storage.pages import HEADER_SIZE, PageHeader, PageType, read_header, write_header
 
 _RID_STRUCT = "<II"
 _RID_SIZE = 8

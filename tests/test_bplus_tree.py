@@ -1,10 +1,9 @@
 import tempfile
 import unittest
 
-from smartdb.indexes.bplus_tree import BPlusTree
-from smartdb.schema import DataType
-from smartdb.storage.buffer_pool import BufferPool
-from smartdb.storage.manager import StorageManager
+from smartdb.core import DataType
+from smartdb.indexes import BPlusTree
+from smartdb.storage import BufferPool, StorageManager
 
 
 class BPlusTreeTests(unittest.TestCase):

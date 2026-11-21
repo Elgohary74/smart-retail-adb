@@ -6,8 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable, Iterator
 
-from .manager import StorageManager
-from .page_file import PageBackend
+from .backends import PageBackend, StorageManager
 
 
 @dataclass

@@ -5,8 +5,8 @@ import os
 import struct
 from pathlib import Path
 
-from ..schema import RID
-from ..storage.manager import StorageManager
+from ...core import RID
+from ...storage import StorageManager
 from .sstable import OpList
 
 _WAL_OP_STRUCT = "<BQiiH"

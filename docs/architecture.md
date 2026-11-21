@@ -8,18 +8,18 @@ This document specifies component boundaries, binary page formats, index storage
 
 ```mermaid
 flowchart TD
-    CLI["CLI / Python API (cli.py)"] --> Parser["Safe SQL Parser (query.py)"]
-    Parser --> Engine["SmartRetailDB Coordinator (engine.py)"]
-    Engine --> Schema["TableSchema & Binary Codecs (schema.py)"]
-    Engine --> Tables["TableStorage: RowTable | ColumnTable"]
+    CLI["CLI / Python API (cli.py)"] --> Parser["Safe SQL Parser (query/parser.py)"]
+    Parser --> Engine["SmartRetailDB Coordinator (engine/db.py)"]
+    Engine --> Core["TableSchema & Binary Codecs (core/)"]
+    Engine --> Tables["RowTable | ColumnTable (storage/tables/)"]
     Engine --> IdxMgr["IndexManager (indexes/manager.py)"]
-    IdxMgr --> BPlus["BPlusTree (page-backed)"]
-    IdxMgr --> LSM["LSMTree (SSTable + WAL + Bloom)"]
-    Tables --> Pool["Shared BufferPool (file_id, page_id)"]
+    IdxMgr --> BPlus["BPlusTree (indexes/bplus/)"]
+    IdxMgr --> LSM["LSMTree (indexes/lsm/)"]
+    Tables --> Pool["Shared BufferPool (storage/buffer_pool.py)"]
     BPlus --> Pool
     LSM --> Pool
-    Pool --> Mgr["StorageManager (storage/manager.py)"]
-    Mgr --> Enc["TransformingBackend (optional AEAD hooks)"]
+    Pool --> Mgr["StorageManager (storage/backends/manager.py)"]
+    Mgr --> Enc["TransformingBackend (storage/backends/encryption.py)"]
     Enc --> Backend["PageFile | LocalObjectStore"]
 ```
 
@@ -27,16 +27,17 @@ flowchart TD
 
 ## 2. Core Components & Contracts
 
-| Component | Module | Responsibility & Key Contract |
+| Component | Package | Responsibility & Key Contract |
 | :--- | :--- | :--- |
-| **Schema & Key Codec** | [schema.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/schema.py) | Defines `DataType`, `ColumnSpec`, `TableSchema`, `RID = tuple[int, int]`. Validates records before any disk/index mutation (`bool` never coerces to `int`; `NaN`/`Inf` rejected). Produces order-preserving byte keys (`encode_key`). |
-| **Storage Manager** | [manager.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/manager.py) | Maps logical names (e.g. `table:Products:row`, `index:Products.price:bplus`) to integer `file_id`s and wraps `PageFile` or `LocalObjectStore` with `TransformingBackend` when encryption is configured. |
+| **Schema & Codecs** | [core/](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/core/__init__.py) | `DataType`, `ColumnSpec`, `TableSchema`, `RID = tuple[int, int]`. Validates records before any disk/index mutation (`bool` never coerces to `int`; `NaN`/`Inf` rejected). Produces order-preserving keys (`key_codec.py`) and binary row payloads (`row_codec.py`). |
+| **Storage Backends** | [storage/backends/](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/backends/__init__.py) | `StorageManager` maps logical names (e.g. `table:Products:row`, `index:Products.price:bplus`) to integer `file_id`s and wraps `PageFile` or `LocalObjectStore` with `TransformingBackend` when encryption is configured. |
 | **Shared Buffer Pool** | [buffer_pool.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/buffer_pool.py) | One DB-wide pool keyed by `(file_id, page_id)`. Enforces `pin_count == 0` before evicting under `FIFO` or `LRU`, supports `pin_page` context-managed pinning, avoids redundant read-misses on `new_page`, and checks `wal_flushed_lsn_fn` prior to dirty write-back. |
-| **Row Table** | [row_table.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/row_table.py) | Slotted-page heap table (`RID = (page_id, slot_id)`). Preserves `slot_id` on delete, updates in-place when payload fits (relocating only on growth), and spills oversized rows/vectors into linked `OVERFLOW` pages. |
-| **Column Table** | [column_table.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/column_table.py) | Per-column `PageBackend` streams + `deleted` bitmap (`RID = (0, rowid)`). Fixed-width columns compute `(page_id, slot)` in $O(1)$; variable-width columns binary-search a page-start directory. `scan_batches(fields=...)` reads only projected columns. |
-| **B+ Tree Index** | [bplus_tree.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/bplus_tree.py) | Page-backed B+ Tree (`BPLUS_META`, `BPLUS_INTERNAL`, `BPLUS_LEAF`). Leaf pages form a doubly-linked list (`next_page`/`prev_page`) for range scans and spill high-duplicity RIDs (>8) into linked `OVERFLOW` bucket pages. |
-| **LSM Tree Index** | [lsm_tree.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/lsm_tree.py) | Write-oriented index with entry-count memtable, buffered framed `memtable.wal`, and immutable SSTable runs stored through `StorageManager` + `BufferPool`. Keeps only `BloomFilter` + sparse fence pointers in RAM. |
-| **Engine & Parser** | [engine.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/engine.py), [query.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/query.py) | Routes safe DDL/DML/SELECT ASTs, pushes projections down to tables, resolves equality/range predicates via indexes with SQL three-valued `NULL` filtering, and tracks per-table telemetry. |
+| **Page Primitives** | [storage/pages/](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/pages/__init__.py) | 24-byte `PageHeader` (`<BBHHHqii`), `SlottedPage` slot directory + intra-page compaction, and linked `OVERFLOW` page chain helpers. |
+| **Row Table** | [row.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/tables/row.py) | Slotted-page heap table (`RID = (page_id, slot_id)`). Preserves `slot_id` on delete, updates in-place when payload fits (relocating only on growth), and spills oversized rows/vectors into linked `OVERFLOW` pages. |
+| **Column Table** | [column.py](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/storage/tables/column.py) | Per-column `PageBackend` streams + `deleted` bitmap (`RID = (0, rowid)`). Fixed-width columns compute `(page_id, slot)` in $O(1)$; variable-width columns binary-search a page-start directory. `scan_batches(fields=...)` reads only projected columns. |
+| **B+ Tree Index** | [indexes/bplus/](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/bplus/__init__.py) | Page-backed B+ Tree (`BPLUS_META`, `BPLUS_INTERNAL`, `BPLUS_LEAF`). Leaf pages form a doubly-linked list (`next_page`/`prev_page`) for range scans and spill high-duplicity RIDs (>8) into linked `OVERFLOW` bucket pages. |
+| **LSM Tree Index** | [indexes/lsm/](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/indexes/lsm/__init__.py) | Write-oriented index with entry-count memtable, buffered framed `LSMWal`, and immutable SSTable runs stored through `StorageManager` + `BufferPool`. Keeps only `BloomFilter` + sparse fence pointers in RAM. |
+| **Query & Engine** | [query/](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/query/__init__.py), [engine/](file:///run/media/radwan/data/University/Year%204/Semester%201/Advanced%20DB/smart-retail-adb/src/smartdb/engine/__init__.py) | `parse_sql` builds safe DDL/DML/SELECT ASTs; `SmartRetailDB` pushes projections down to tables, resolves equality/range predicates with SQL three-valued `NULL` filtering, persists `CatalogStore`, and tracks per-table telemetry. |
 
 ---
 
@@ -94,10 +95,10 @@ Every usable page begins with a 24-byte `PageHeader` (`struct "<BBHHHqii"`):
 
 - **M3 (Query Processing Engine):**
   - `ColumnTable.scan_batches(fields=...)` already produces columnar `dict[str, list]` batches for vectorized `SELECT` and `JOIN` operators.
-  - `TableSchema` + persisted `_table_stats` (`reads`, `writes`, `range_reads`) + `IndexManager.range_search` provide the metadata and access paths required by a cost-based optimizer.
+  - `TableSchema` + persisted `table_stats` (`reads`, `writes`, `range_reads`) + `IndexManager.range_search` provide the metadata and access paths required by a cost-based optimizer under `query/`.
 - **M4 (Transactions & Recovery):**
   - `PageHeader.lsn`, `BufferFrame.page_lsn`/`rec_lsn`, and `BufferPool(..., wal_flushed_lsn_fn=...)` are already wired for ARIES steal/no-force WAL recovery.
-  - `RowTable` stable `(page_id, slot_id)` slots and `ColumnTable` deleted bitmaps provide stable tuple anchors for MVCC version chains and row/page locks.
+  - `RowTable` stable `(page_id, slot_id)` slots and `ColumnTable` deleted bitmaps provide stable tuple anchors for MVCC version chains and row/page locks under `engine/`.
 - **M5 (Distributed Layer & Exact Top-K Vector Search):**
   - `DataType.VECTOR(D)` and `OVERFLOW` pages persist arbitrary fixed-dimensional `float32` embeddings directly inside the custom storage engine.
   - `StorageManager` + `LocalObjectStore` provide a clean abstraction for node-local or shared-object storage alongside Raft/2PC coordination.

@@ -2,11 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from smartdb.schema import ColumnSpec, DataType, TableSchema
-from smartdb.storage.buffer_pool import BufferPool
-from smartdb.storage.manager import StorageManager
-from smartdb.storage.row_table import RowTable
-from smartdb.storage.slotted_page import PageType, SlottedPage
+from smartdb.core import ColumnSpec, DataType, TableSchema
+from smartdb.storage import BufferPool, RowTable, StorageManager
+from smartdb.storage.pages import PageType, SlottedPage
 
 
 class RowTableTests(unittest.TestCase):

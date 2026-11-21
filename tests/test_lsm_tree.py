@@ -3,11 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from smartdb.indexes.lsm_tree import BloomFilter, LSMTree
-from smartdb.schema import DataType
-from smartdb.storage.buffer_pool import BufferPool
-from smartdb.storage.encryption import make_aes_gcm_hooks
-from smartdb.storage.manager import StorageManager
+from smartdb.core import DataType
+from smartdb.indexes import BloomFilter, LSMTree
+from smartdb.storage import BufferPool, StorageManager, make_aes_gcm_hooks
 
 
 class LSMTreeTests(unittest.TestCase):

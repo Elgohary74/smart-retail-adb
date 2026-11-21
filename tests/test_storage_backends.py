@@ -3,10 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from smartdb.storage.encryption import TransformingBackend, make_aes_gcm_hooks
-from smartdb.storage.manager import StorageManager
-from smartdb.storage.object_store import LocalObjectStore
-from smartdb.storage.page_file import PAGE_SIZE, PageFile
+from smartdb.storage import (
+    PAGE_SIZE,
+    LocalObjectStore,
+    PageFile,
+    StorageManager,
+    TransformingBackend,
+    make_aes_gcm_hooks,
+)
 
 
 class StorageBackendTests(unittest.TestCase):
