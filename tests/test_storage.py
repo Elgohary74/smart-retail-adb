@@ -4,7 +4,12 @@ from pathlib import Path
 
 from smartdb.storage.page_file import PAGE_SIZE, PageFile
 from smartdb.storage.buffer_pool import BufferPool
-from smartdb.storage.layouts import encode_records, decode_records
+from smartdb.storage.layouts import (
+    ColumnLayout,
+    RowLayout,
+    decode_records,
+    encode_records,
+)
 from smartdb.storage.object_store import LocalObjectStore
 from smartdb.storage.encryption import TransformingBackend
 from smartdb.storage.schema import Column, TableSchema
@@ -208,6 +213,115 @@ class PageFileTests(unittest.TestCase):
             pool.unpin_page(2)
             pool.read_page(1)
             pool.close()
+
+    def test_row_layout_crud_projection_and_stable_slots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            schema = TableSchema.from_spec([("id", "INT"), ("note", "STR")])
+            backend = PageFile(Path(tmp) / "rows.pages", page_size=256)
+            pool = BufferPool(capacity=4, policy="LRU")
+            pool.register_backend("t.data", backend)
+            layout = RowLayout(pool, "t", schema)
+
+            locs = [layout.insert({"id": i, "note": f"item-{i:03d}"}) for i in range(15)]
+            self.assertGreater(backend.page_count, 1)
+
+            # Deleting slot 0 on page 0 must not shift slot 1 on page 0.
+            loc_after = locs[1]
+            layout.delete(locs[0])
+            with self.assertRaises(KeyError):
+                layout.get_record(locs[0])
+            self.assertEqual(layout.get_record(loc_after)["id"], 1)
+
+            # In-place update keeps locator; oversized update relocates cleanly.
+            same_loc = layout.update(loc_after, {"id": 1, "note": "short"})
+            self.assertEqual(same_loc, loc_after)
+            self.assertEqual(layout.get_record(same_loc)["note"], "short")
+
+            moved_loc = layout.update(loc_after, {"id": 1, "note": "X" * 180})
+            self.assertNotEqual(moved_loc, loc_after)
+            with self.assertRaises(KeyError):
+                layout.get_record(loc_after)
+            self.assertEqual(layout.get_record(moved_loc)["note"], "X" * 180)
+
+            projected = [row for _, row in layout.iter_records(columns=["id"])]
+            self.assertEqual(len(projected), 14)
+            self.assertEqual(set(projected[0].keys()), {"id"})
+
+            batches = list(layout.iter_batches(columns=["id"], batch_size=5))
+            self.assertEqual(sum(len(b["id"]) for b in batches), 14)
+            pool.close()
+
+    def test_column_layout_crud_and_projection_io_savings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            schema = TableSchema.from_spec([
+                ("id", "INT"),
+                ("price", "FLOAT"),
+                ("desc_a", "STR"),
+                ("desc_b", "STR"),
+                ("desc_c", "STR"),
+            ])
+            pool = BufferPool(capacity=2, policy="LRU")
+            for stream in ("t.col.id", "t.col.price", "t.col.desc_a", "t.col.desc_b", "t.col.desc_c", "t._tombstones"):
+                pool.register_backend(stream, PageFile(Path(tmp) / f"{stream}.pages", page_size=512))
+            layout = ColumnLayout(pool, "t", schema)
+
+            locs = [
+                layout.insert({
+                    "id": i,
+                    "price": float(i) + 0.5,
+                    "desc_a": f"alpha-{i}-" + ("a" * 30),
+                    "desc_b": f"beta-{i}-" + ("b" * 30),
+                    "desc_c": f"gamma-{i}-" + ("c" * 30),
+                })
+                for i in range(60)
+            ]
+            layout.delete(locs[5])
+            with self.assertRaises(KeyError):
+                layout.get_record(locs[5])
+            self.assertEqual(layout.get_record(locs[6])["id"], 6)
+
+            same_loc = layout.update(locs[6], {
+                "id": 6,
+                "price": 99.5,
+                "desc_a": "small-a",
+                "desc_b": "small-b",
+                "desc_c": "small-c",
+            })
+            self.assertEqual(same_loc, locs[6])
+            self.assertEqual(layout.get_record(locs[6])["price"], 99.5)
+
+            moved_loc = layout.update(locs[7], {
+                "id": 7,
+                "price": 12.5,
+                "desc_a": "Z" * 350,
+                "desc_b": "small-b",
+                "desc_c": "small-c",
+            })
+            self.assertNotEqual(moved_loc, locs[7])
+            with self.assertRaises(KeyError):
+                layout.get_record(locs[7])
+            self.assertEqual(layout.get_record(moved_loc)["desc_a"], "Z" * 350)
+
+            pool.flush()
+            pool.close()
+
+            # Reopen with cold cache and compare projection disk_reads vs full-table scan.
+            proj_pool = BufferPool(capacity=2, policy="LRU")
+            for stream in ("t.col.id", "t.col.price", "t.col.desc_a", "t.col.desc_b", "t.col.desc_c", "t._tombstones"):
+                proj_pool.register_backend(stream, PageFile(Path(tmp) / f"{stream}.pages", page_size=512))
+            reopened = ColumnLayout(proj_pool, "t", schema)
+            reads_before_proj = proj_pool.stats.disk_reads
+            proj_rows = [row for _, row in reopened.iter_records(columns=["id", "price"])]
+            proj_reads = proj_pool.stats.disk_reads - reads_before_proj
+            self.assertEqual(len(proj_rows), 59)
+            self.assertEqual(set(proj_rows[0].keys()), {"id", "price"})
+
+            reads_before_full = proj_pool.stats.disk_reads
+            full_rows = [row for _, row in reopened.iter_records()]
+            full_reads = proj_pool.stats.disk_reads - reads_before_full
+            self.assertEqual(len(full_rows), 59)
+            self.assertLess(proj_reads, full_reads)
+            proj_pool.close()
 
 
 if __name__ == "__main__":
